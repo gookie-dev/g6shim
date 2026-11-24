@@ -611,6 +611,9 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
         }
         if (used != nullptr && used->kind.kind == ResourceType::Kind::Cbv)
             fail("a constant buffer's descriptor read as data");
+    } else if (std::holds_alternative<SmemFields>(ui.fields) && un.starts_with("s_buffer_load_dword") &&
+               used != nullptr && used->kind.kind == ResourceType::Kind::Srv) {
+        props = {11, 0};
     } else {
         fail("a scalar memory read as data");
     }

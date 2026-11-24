@@ -1,11 +1,11 @@
 {
   "title_id": "7952987A",
   "stages": {
-    "cs": {"total": 2734, "decoded": 1293, "translated": 1441, "failed": 0},
+    "cs": {"total": 2734, "decoded": 1285, "translated": 1449, "failed": 0},
     "gs": {"total": 195, "decoded": 195, "translated": 0, "failed": 0},
-    "ms": {"total": 8765, "decoded": 551, "translated": 8214, "failed": 0},
-    "ps": {"total": 12069, "decoded": 1957, "translated": 10110, "failed": 2},
+    "ms": {"total": 8765, "decoded": 385, "translated": 8380, "failed": 0},
+    "ps": {"total": 12069, "decoded": 1930, "translated": 10137, "failed": 2},
     "unknown": {"total": 29, "decoded": 0, "translated": 0, "failed": 29},
-    "vs": {"total": 2193, "decoded": 59, "translated": 2133, "failed": 1}
+    "vs": {"total": 2193, "decoded": 29, "translated": 2163, "failed": 1}
   }
 }
