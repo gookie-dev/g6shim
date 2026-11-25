@@ -26,15 +26,15 @@ ds_write2_b32 v11, v8, v9 offset0:2 offset1:3
 ds_write_b32 v11, v5 offset:16
 s_sendmsg 0x22
 v_mov_b32 v6, 0x3f000000
-ds_write2_b32 v11, v6, v7 offset0:0 offset1:1
-ds_write2_b32 v11, v8, v9 offset0:2 offset1:3
-ds_write_b32 v11, v5 offset:16
+ds_write2_b32 v11, v6, v7 offset0:8 offset1:9
+ds_write2_b32 v11, v8, v9 offset0:10 offset1:11
+ds_write_b32 v11, v5 offset:48
 s_sendmsg 0x22
 v_mov_b32 v6, 0
 v_mov_b32 v7, 0x3f000000
-ds_write2_b32 v11, v6, v7 offset0:0 offset1:1
-ds_write2_b32 v11, v8, v9 offset0:2 offset1:3
-ds_write_b32 v11, v5 offset:16
+ds_write2_b32 v11, v6, v7 offset0:16 offset1:17
+ds_write2_b32 v11, v8, v9 offset0:18 offset1:19
+ds_write_b32 v11, v5 offset:80
 s_sendmsg 0x22
 s_sendmsg 0x12
 .Ldone:

@@ -34,9 +34,9 @@ constexpr std::uint32_t kGsWords[] = {
     0x360404ff, 0x0003fffc, 0xbe810382, 0x340600f9, 0x05860601, 0x7e0802f9, 0x00040601, 0xd8d80010,
     0x05000002, 0xd8d80010, 0x0a000003, 0xf4000104, 0xfa000000, 0x8f048204, 0x81048404, 0xd543000b,
     0x040a0404, 0x7e0c02f1, 0x7e0e02f1, 0x7e100280, 0x7e1202f2, 0xd8380100, 0x0007060b, 0xd8380302,
-    0x0009080b, 0xd8340010, 0x0000050b, 0xbf900022, 0x7e0c02f0, 0xd8380100, 0x0007060b, 0xd8380302,
-    0x0009080b, 0xd8340010, 0x0000050b, 0xbf900022, 0x7e0c0280, 0x7e0e02f0, 0xd8380100, 0x0007060b,
-    0xd8380302, 0x0009080b, 0xd8340010, 0x0000050b, 0xbf900022, 0xbf900012, 0xbf900003, 0xbf810000,
+    0x0009080b, 0xd8340010, 0x0000050b, 0xbf900022, 0x7e0c02f0, 0xd8380908, 0x0007060b, 0xd8380b0a,
+    0x0009080b, 0xd8340030, 0x0000050b, 0xbf900022, 0x7e0c0280, 0x7e0e02f0, 0xd8381110, 0x0007060b,
+    0xd8381312, 0x0009080b, 0xd8340050, 0x0000050b, 0xbf900022, 0xbf900012, 0xbf900003, 0xbf810000,
 };
 constexpr std::uint32_t kTarget = 16;
 constexpr std::uint32_t kCentre = 8;
@@ -501,6 +501,24 @@ TEST(geometry_shader_validates_with_different_signature_widths) {
     constexpr std::uint8_t kInputTexcoordColumns = 3;
     check_dxil(translate(geometry_container(kGsWords, kInputTexcoordColumns)).dxil,
                "geometry with different signature widths");
+}
+
+TEST(geometry_shader_rejects_a_write_to_a_later_vertex_before_emit) {
+    constexpr std::uint32_t kStoreFirstPositionPair = 0xd8380100;
+    constexpr std::uint32_t kStoreSecondPositionPair = 0xd8380908;
+    std::vector<std::uint32_t> words(std::begin(kGsWords), std::end(kGsWords));
+    const auto store = std::find(words.begin(), words.end(), kStoreFirstPositionPair);
+    CHECK(store != words.end());
+    if (store == words.end()) return;
+    *store = kStoreSecondPositionPair;
+    bool rejected = false;
+    try {
+        (void)translate(geometry_container(words));
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("a geometry output the signature lacks") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
 }
 
 TEST(geometry_shader_rejects_an_untracked_load_used_as_output_data) {

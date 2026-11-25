@@ -12,6 +12,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -39,6 +40,68 @@ constexpr std::uint8_t kGsOpEmit = 2;
 constexpr std::uint8_t kGsOpEmitCut = 3;
 constexpr std::uint32_t kEmitStream = 97;
 constexpr std::uint32_t kCutStream = 98;
+
+std::optional<std::pair<std::size_t, std::uint8_t>> declared_geometry_slot(std::span<const SigElement> elements,
+                                                                         std::uint32_t dword) {
+    const std::uint32_t row = dword / 4;
+    const std::uint8_t col = static_cast<std::uint8_t>(dword % 4);
+    for (std::size_t id = 0; id < elements.size(); ++id) {
+        const SigElement& element = elements[id];
+        if (element.row == row && col >= element.col && col < element.col + element.cols)
+            return std::pair<std::size_t, std::uint8_t>{id, static_cast<std::uint8_t>(col - element.col)};
+    }
+    return std::nullopt;
+}
+
+void normalize_geometry_stores(const Program& program, std::span<const SigElement> outputs,
+                               std::vector<RingStore>& stores) {
+    if (stores.empty() || outputs.empty() ||
+        std::all_of(stores.begin(), stores.end(), [&](const RingStore& store) {
+            return declared_geometry_slot(outputs, store.dword).has_value();
+        }))
+        return;
+    const std::size_t store_block = stores.front().site.block;
+    if (stores.back().site.block != store_block) return;
+
+    std::uint64_t stride = 0;
+    for (const SigElement& output : outputs)
+        if (output.row) stride = std::max(stride, 4 * (std::uint64_t{*output.row} + 1));
+    if (stride == 0) return;
+
+    std::vector<std::uint32_t> slots;
+    slots.reserve(stores.size());
+    std::uint64_t base = 0;
+    bool wrote_vertex = false;
+    bool strip_cut = false;
+    for (std::size_t b = 0; b < program.blocks.size(); ++b) {
+        const IrBlock& block = program.blocks[b];
+        for (std::size_t i = 0; i < block.insts.size(); ++i) {
+            while (slots.size() < stores.size() && stores[slots.size()].site == Site{b, i}) {
+                const std::uint32_t word = stores[slots.size()].dword;
+                if (strip_cut || word < base || word - base >= stride) return;
+                const std::uint32_t slot = static_cast<std::uint32_t>(word - base);
+                if (!declared_geometry_slot(outputs, slot)) return;
+                slots.push_back(slot);
+                wrote_vertex = true;
+            }
+            const IrInst& inst = block.insts[i];
+            if (inst.name() != "s_sendmsg" && inst.name() != "s_sendmsghalt") continue;
+            const auto* fields = std::get_if<SoppFields>(&inst.fields);
+            if (fields == nullptr || (fields->imm & 0xF) != kMsgGs) continue;
+            const std::uint16_t op = (fields->imm >> 4) & 7;
+            if (op == 0) continue;
+            if (op > kGsOpEmitCut || b != store_block || ((fields->imm >> 8) & 3) != 0 || strip_cut) return;
+            if (op == kGsOpEmit || op == kGsOpEmitCut) {
+                if (!wrote_vertex) return;
+                wrote_vertex = false;
+                base += stride;
+            }
+            if (op == kGsOpCut || op == kGsOpEmitCut) strip_cut = true;
+        }
+    }
+    if (slots.size() != stores.size() || wrote_vertex) return;
+    for (std::size_t i = 0; i < slots.size(); ++i) stores[i].dword = slots[i];
+}
 
 Why mask_data_reason(const Bools& bools, Bool bits) {
     for (const Atom& atom : bools.support(bits)) {
@@ -311,6 +374,8 @@ Lower::Lower(const Parts& parts, const std::unordered_map<Value, Why, ValueHash>
         geometry.output_topology = kTriangleStrip;
         geometry.instances = 1;
         s_.geometry = geometry;
+        geometry_stores_ = parts.io->ring_stores;
+        normalize_geometry_stores(p, s_.outputs, geometry_stores_);
     }
     if (parts.native->stage == HwStage::Cs) mask_data_ = MaskData::Console;
     else if (parts.native->stage == HwStage::Ps || parts.native->stage == HwStage::Vs ||
@@ -846,14 +911,9 @@ Val Lower::load_any_input(std::size_t id, std::uint8_t col, std::optional<std::u
 std::optional<std::pair<std::size_t, std::uint8_t>> Lower::geometry_slot(std::vector<SigElement>& elements,
                                                                          std::uint32_t dword, bool input) {
     if (dword > 255) return std::nullopt;
+    if (const auto slot = declared_geometry_slot(elements, dword)) return slot;
     const std::uint8_t row = static_cast<std::uint8_t>(dword / 4);
     const std::uint8_t col = static_cast<std::uint8_t>(dword % 4);
-    for (std::size_t id = 0; id < elements.size(); ++id) {
-        const SigElement& element = elements[id];
-        if (!element.row || *element.row != row) continue;
-        if (col >= element.col && col < element.col + element.cols)
-            return std::pair<std::size_t, std::uint8_t>{id, static_cast<std::uint8_t>(col - element.col)};
-    }
     if (!elements.empty()) return std::nullopt;
     SigElement element;
     element.row = row;
@@ -892,7 +952,7 @@ void Lower::geometry_ring(const IrInst& inst, std::size_t b, std::size_t i) {
         write(inst, Reg::v(load.vgpr), value.value, guard_value);
     }
     const auto at = begin_guarded(guard_value);
-    for (const RingStore& store : x_->io->ring_stores) {
+    for (const RingStore& store : geometry_stores_) {
         if (store.site != site) continue;
         matched = true;
         const std::optional<std::pair<std::size_t, std::uint8_t>> slot =

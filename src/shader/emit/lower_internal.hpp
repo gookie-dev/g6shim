@@ -288,6 +288,7 @@ private:
     std::unordered_map<Site, Address, SiteHash> scalar_;
     std::map<Site, const Export*> exports_;
     std::map<Site, const Interp*> interps_;
+    std::vector<RingStore> geometry_stores_;
     std::map<std::tuple<std::size_t, Site, std::uint8_t, bool, std::uint32_t>, V> handles_;
     std::map<std::pair<std::size_t, std::size_t>, std::size_t> edges_;
     std::vector<bool> exported_;
