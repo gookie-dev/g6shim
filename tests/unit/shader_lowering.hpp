@@ -18,6 +18,8 @@ shader::RootParam root_param(shader::RootType::Kind kind, std::uint8_t user_data
 
 shader::UsedResource used_uav(std::uint8_t user_data, std::uint8_t slot, std::uint8_t dwords = 4);
 
+shader::emit::Lowered lower_native(const shader::NativeProgram& native);
+
 shader::emit::Lowered lower_compute(const std::vector<std::uint32_t>& words, std::uint16_t vgprs,
                                     const std::vector<shader::RootParam>& layout,
                                     const std::vector<shader::UsedResource>& used, std::uint32_t rsrc2,

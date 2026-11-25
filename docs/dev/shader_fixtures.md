@@ -34,6 +34,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `scalar_image_address.s` uses the first slot for an image descriptor. It stores the shifted base address, the image load result, a sampling performance bit, a comparison of reserved bits and a compression metadata address bit. The negative case checks that corner sampling remains unavailable.
 
+`image_sample_bias_a16.s` is a pixel shader with a dedicated register for the half-precision bias and a non-sequential address register for the two packed half-precision coordinates.
+
 ## Adding a program
 
 1. Write `tests/gfx10/<rule>.s` in the frame above; the file name is the fixture's name.

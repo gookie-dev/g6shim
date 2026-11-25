@@ -42,6 +42,7 @@ constexpr std::string_view kScalarStructuredFields = "scalar_structured_fields";
 constexpr std::string_view kScalarRawHighWord = "scalar_raw_buffer_high_word";
 constexpr std::string_view kScalarTypedFormat = "scalar_typed_buffer_format";
 constexpr std::string_view kScalarImageAddress = "scalar_image_address";
+constexpr std::string_view kImageSampleBiasA16 = "image_sample_bias_a16";
 
 const Fixture* find_fixture(std::string_view name) {
     const auto found = std::find_if(std::begin(kFixtures), std::end(kFixtures),
@@ -64,7 +65,8 @@ TEST(shader_fixtures_translate_and_validate) {
         if (fixture.name == kScalarBufferLength || fixture.name == kScalarBufferAddress ||
             fixture.name == kScalarBufferFields || fixture.name == kScalarStructuredFields ||
             fixture.name == kScalarRawHighWord || fixture.name == kScalarTypedFormat ||
-            fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords)
+            fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords ||
+            fixture.name == kImageSampleBiasA16)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -78,6 +80,35 @@ TEST(shader_fixtures_translate_and_validate) {
         if (!translated) continue;
         CHECK(lowered.user_data.size() == kUserSgprs);
         check_dxil(lowered.dxil, fixture.name);
+    }
+}
+
+TEST(shader_fixtures_translate_biased_sample_with_packed_coordinates) {
+    const Fixture* fixture = find_fixture(kImageSampleBiasA16);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+
+    UsedResource texture = used_uav(kTableUserData, kTableSlot);
+    texture.kind.kind = ResourceType::Kind::Srv;
+    texture.dwords = 8;
+    UsedResource output = used_uav(kTableUserData, kTableSlot);
+    output.table_offset_dwords = kSecondDescriptorDword;
+    constexpr std::uint8_t kSamplerUserData = 6;
+    constexpr std::uint8_t kSamplerSlot = 2;
+    NativeProgram native;
+    native.stage = HwStage::Ps;
+    native.vgprs = kFixtureVgprs;
+    native.io = PsIo{};
+    native.layout = {root_param(RootType::Kind::Table, kTableUserData, kTableSlot),
+                     root_param(RootType::Kind::SamplerHeap, kSamplerUserData, kSamplerSlot)};
+    native.used = {texture, output};
+    native.code = bytes_of(fixture->words);
+    try {
+        const Lowered lowered = lower_native(native);
+        check_dxil(lowered.dxil, fixture->name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
     }
 }
 

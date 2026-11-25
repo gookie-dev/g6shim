@@ -22,7 +22,7 @@ void Lower::image(const IrInst& inst, std::size_t b, std::size_t i) {
     const std::string_view name = inst.name();
     const bool a16 = fields->a16;
     const bool d16 = fields->d16;
-    if (a16 && name.starts_with("image_sample_b"))
+    if (a16 && name.starts_with("image_sample_b") && name != "image_sample_b")
         fail("a biased image sample with 16-bit coordinates");
     const std::uint8_t dmask = fields->dmask == 0 ? 1 : fields->dmask;
     const Site site{b, i};
@@ -54,8 +54,8 @@ void Lower::image(const IrInst& inst, std::size_t b, std::size_t i) {
                 regs.push_back(static_cast<std::uint8_t>(vector->reg + k));
         }
     }
-    const auto addr_val = [&](std::size_t k) -> V {
-        const std::size_t index = a16 ? k / 2 : k;
+    const auto addr_val = [&](std::size_t k, std::size_t prefix_words = 0) -> V {
+        const std::size_t index = prefix_words + (a16 ? k / 2 : k);
         if (index >= regs.size()) fail("an image address");
         const std::optional<Value> read = inst.read(Reg::v(regs[index]));
         if (!read) fail("an image address");
@@ -274,8 +274,8 @@ void Lower::image(const IrInst& inst, std::size_t b, std::size_t i) {
             fail("a comparison sample of 16-bit coordinates or several channels");
         const V sh = handle(site, ss, true, {14 | (cmp ? 0x8000u : 0u), 0});
         const bool offset_word = name.ends_with("_o");
-        const std::size_t first = (offset_word ? 1u : 0u) +
-                                  (name == "image_sample_b" ? 1u : 0u) + (cmp ? 1u : 0u);
+        const std::size_t first = (offset_word ? 1u : 0u) + (cmp ? 1u : 0u);
+        const std::size_t bias_words = op == 61 ? 1u : 0u;
         const std::size_t spatial = coords - ((kind == 6 || kind == 7) ? 1u : 0u);
         const std::size_t grads = op == 63 ? 2 * spatial : 0;
         std::vector<V> cs(4, fu);
@@ -284,7 +284,7 @@ void Lower::image(const IrInst& inst, std::size_t b, std::size_t i) {
             return as_float(x);
         };
         for (std::size_t k = 0; k < coords; ++k) {
-            const V x = addr_val(first + grads + k);
+            const V x = addr_val(first + grads + k, bias_words);
             cs[k] = to_float(x);
         }
         if (kind == 5) {
@@ -346,7 +346,7 @@ void Lower::image(const IrInst& inst, std::size_t b, std::size_t i) {
             args.push_back(fu);
             r = s_.op(c, "sample.f32", Attr::ReadOnly, s_.t.res_ret, 60, args);
         } else if (op == 61) {
-            const V bias = as_float(addr_val(0));
+            const V bias = to_float(addr_val(0));
             args.insert(args.end(), os.begin(), os.end());
             args.push_back(bias);
             args.push_back(fu);

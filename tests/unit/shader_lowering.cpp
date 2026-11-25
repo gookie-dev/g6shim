@@ -55,6 +55,20 @@ UsedResource used_uav(std::uint8_t user_data, std::uint8_t slot, std::uint8_t dw
     return used;
 }
 
+Lowered lower_native(const NativeProgram& native) {
+    const Program program = ::g6shim::shader::build(native.patched_code(), native.wave64, native.vgprs);
+    const Structured structured = structure(program);
+    const Resources resources = track(program, native.layout, native.stage, &structured);
+    const Io raised = raise(program, native);
+    Parts parts;
+    parts.native = &native;
+    parts.p = &program;
+    parts.st = &structured;
+    parts.io = &raised;
+    parts.res = &resources;
+    return lower(parts);
+}
+
 Lowered lower_compute(const std::vector<std::uint32_t>& words, std::uint16_t vgprs,
                       const std::vector<RootParam>& layout, const std::vector<UsedResource>& used,
                       std::uint32_t rsrc2, std::array<std::uint32_t, 3> threads) {
@@ -69,17 +83,7 @@ Lowered lower_compute(const std::vector<std::uint32_t>& words, std::uint16_t vgp
     io.threads = threads;
     native.io = io;
     native.code = bytes_of(words);
-    const Program program = ::g6shim::shader::build(native.patched_code(), native.wave64, native.vgprs);
-    const Structured structured = structure(program);
-    const Resources resources = track(program, native.layout, native.stage, &structured);
-    const Io raised = raise(program, native);
-    Parts parts;
-    parts.native = &native;
-    parts.p = &program;
-    parts.st = &structured;
-    parts.io = &raised;
-    parts.res = &resources;
-    return lower(parts);
+    return lower_native(native);
 }
 
 std::optional<Validator> load_validator() {
