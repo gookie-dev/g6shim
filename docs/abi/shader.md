@@ -67,6 +67,8 @@ One bit of `SPI_PS_INPUT_ADDR` per entry, in this order; each enabled entry take
 User data dword `i` arrives in SGPR `i` in the vertex, pixel and compute stages, and in SGPR `i + 8` in the merged stages.
 A table or heap parameter holds the 32-bit heap address in its first dword, with the high half set to 0; a root descriptor holds a 64-bit buffer address in its first two.
 
+One compute layout reserves four hardware user SGPRs and starts logical root data at word 16. Fixed scalar loads through the pointer copied from `s0` and the low eight bits of `s1` read declared logical words starting at `16 + byte_offset / 4`. The translator binds those words through the ordinary root constants and descriptor paths. Undeclared words and direct reads of a spilled table's high address word remain unsupported. [Public description of user data spilling](https://releases.llvm.org/16.0.0/docs/AMDGPUUsage.html#spill-table)
+
 ## Geometry stage
 
 A geometry program is a merged export/geometry stage on local-data-share rings, not a primitive shader. It is wave64. It does not use `exp`.

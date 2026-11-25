@@ -553,6 +553,19 @@ V Lower::scc_in(const IrInst& inst) {
 }
 
 void Lower::smem(const IrInst& inst, Site site) {
+    const auto& spilled = x_->res->spilled_root_loads;
+    if (std::binary_search(spilled.begin(), spilled.end(), site)) {
+        for (const auto& write : inst.writes) {
+            const auto root = params_.find(write.second);
+            if (root == params_.end()) {
+                vals_[write.second] = Val::missing("an undeclared spilled root word");
+            } else if (root->second.second != 0 &&
+                       x_->native->layout[root->second.first].root.kind == RootType::Kind::Table) {
+                vals_[write.second] = Val::missing("a spilled table address high word read as data");
+            }
+        }
+        return;
+    }
     const auto* fields = std::get_if<SmemFields>(&inst.fields);
     if (fields == nullptr) std::abort();
     const std::string_view name = inst.name();

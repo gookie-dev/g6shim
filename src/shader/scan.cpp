@@ -183,7 +183,7 @@ std::vector<std::uint8_t> translate_program(const Container& container, const Na
     const Structured structured = structure(program);
     Io io;
     if (native.stage == HwStage::Gs) io = raise(program, native);
-    const Resources resources = track(program, native.layout, native.stage, &structured, io.ring_address_loads);
+    const Resources resources = track(program, native, &structured, io.ring_address_loads);
     if (native.stage != HwStage::Gs) io = raise(program, native);
     emit::HostShader shader = emit::emit(container, native, program, structured, io, resources);
     return std::move(shader.dxil);

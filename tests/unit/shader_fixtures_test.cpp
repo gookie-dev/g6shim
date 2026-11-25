@@ -55,6 +55,7 @@ constexpr std::string_view kBufferHeapStride = "buffer_heap_stride";
 constexpr std::string_view kSamplerLodData = "sampler_lod_data";
 constexpr std::string_view kPackedInputPartner = "packed_input_partner";
 constexpr std::string_view kSelectReadLaneMask = "select_readlane_mask";
+constexpr std::string_view kSpilledComputeRoot = "spilled_compute_root";
 
 const Fixture* find_fixture(std::string_view name) {
     const auto found = std::find_if(std::begin(kFixtures), std::end(kFixtures),
@@ -176,7 +177,8 @@ TEST(shader_fixtures_translate_and_validate) {
             fixture.name == kImageSampleBiasA16 || fixture.name == kScalarBufferCountOnly ||
             fixture.name == kPackedInputPartner || fixture.name == kSelectReadLaneMask ||
             fixture.name == kImageShapeOnly || fixture.name == kImageHeapShape ||
-            fixture.name == kBufferHeapStride || fixture.name == kSamplerLodData)
+            fixture.name == kBufferHeapStride || fixture.name == kSamplerLodData ||
+            fixture.name == kSpilledComputeRoot)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -191,6 +193,45 @@ TEST(shader_fixtures_translate_and_validate) {
         CHECK(lowered.user_data.size() == kUserSgprs);
         check_dxil(lowered.dxil, fixture.name);
     }
+}
+
+TEST(shader_fixtures_translate_spilled_compute_root_words) {
+    const Fixture* fixture = find_fixture(kSpilledComputeRoot);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    constexpr std::uint8_t kSpilledTable = 16;
+    constexpr std::uint8_t kSpilledConstants = 18;
+    constexpr std::uint32_t kSpillPointerUserSgprs = 4;
+    RootParam table = root_param(RootType::Kind::Table, kSpilledTable, kTableSlot);
+    RootParam constants = root_param(RootType::Kind::Constants, kSpilledConstants, kConstantsSlot);
+    table.sgprs = constants.sgprs = 2;
+    try {
+        const Lowered lowered = lower_compute(fixture->words, kFixtureVgprs, {table, constants},
+                                              {used_uav(kSpilledTable, kTableSlot)},
+                                              kSpillPointerUserSgprs << kUserSgprShift, {1, 1, 1});
+        const auto has_root = [&](std::uint32_t index, std::uint8_t slot) {
+            return std::any_of(lowered.user_data.begin(), lowered.user_data.end(), [&](const UserData& word) {
+                return word.source == UserData::Source::Root && word.index == index && word.slot == slot &&
+                       word.dword == 0;
+            });
+        };
+        CHECK(has_root(kSpilledTable, kTableSlot));
+        CHECK(has_root(kSpilledConstants, kConstantsSlot));
+        check_dxil(lowered.dxil, fixture->name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
+    }
+    bool rejected = false;
+    try {
+        (void)lower_compute(fixture->words, kFixtureVgprs, {table, constants},
+                            {used_uav(kSpilledTable, kTableSlot)},
+                            (kSpillPointerUserSgprs + 1) << kUserSgprShift, {1, 1, 1});
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("an address in an SGPR that is no root parameter") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
 }
 
 TEST(shader_fixtures_translate_biased_sample_with_packed_coordinates) {

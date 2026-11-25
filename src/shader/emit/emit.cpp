@@ -182,7 +182,7 @@ HostShader translate(std::span<const std::uint8_t> container) {
     }
     Io io;
     if (native->stage == HwStage::Gs) io = raise(program, *native);
-    const Resources resources = track(program, native->layout, native->stage, structured ? &*structured : nullptr,
+    const Resources resources = track(program, *native, structured ? &*structured : nullptr,
                                       io.ring_address_loads);
     if (native->stage != HwStage::Gs) io = raise(program, *native);
     if (!structured) std::rethrow_exception(structure_failure);

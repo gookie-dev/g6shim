@@ -38,6 +38,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `image_sample_bias_a16.s` uses a dedicated register for the half-precision bias and a non-sequential address register for the two packed half-precision coordinates. The fixture validates implicit and biased sampling in both pixel and compute shaders.
 
+`spilled_compute_root.s` reads one descriptor table pointer and two constant words from a fixed scalar load. The test verifies the logical root indices and rejects the same pointer pattern with a different hardware user-register count.
+
 `image_shape_only.s` reads the split width bits and starting mip of an image descriptor without using it in an image instruction. It also joins the two masked width words with a constant bit alignment. The negative cases ask for an unavailable bit or use a variable alignment that needs both full words.
 
 `image_heap_shape.s` reads the split width and starting mip through an index computed from a root constant. A scalar move preserves which bits can be read from the selected view. The fixture rejects a shift that needs an unavailable bit and omits the metadata binding when the result is unused.

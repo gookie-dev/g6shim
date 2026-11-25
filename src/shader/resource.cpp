@@ -119,10 +119,12 @@ std::optional<Moved> copy_source(const Inst& inst, std::size_t k) {
     return std::nullopt;
 }
 
+using RootWord = std::pair<std::size_t, std::uint32_t>;
+
 class Tracer {
 public:
     Tracer(const Program& program, const std::vector<RootParam>& layout, HwStage stage,
-           const Structured* lanes)
+           const Structured* lanes, const ComputeIo* compute)
         : p_(&program), layout_(&layout), stage_(stage), lanes_(lanes) {
         std::size_t n = 0;
         for (const auto& entry : program.inputs)
@@ -148,6 +150,7 @@ public:
         const std::vector<std::size_t> order = reverse_postorder(program.blocks);
         for (std::size_t position = 0; position < order.size(); ++position) rpo_[order[position]] = position;
         origin_ = propagate_copies(n);
+        if (compute != nullptr && stage == HwStage::Cs) find_spilled_roots(*compute);
     }
 
     const Inst& inst(Site site) const { return p_->blocks[site.block].insts[site.index]; }
@@ -156,15 +159,15 @@ public:
         return value.index < origin_.size() ? origin_[value.index] : Term::origin(value);
     }
 
-    std::optional<std::pair<std::size_t, std::uint32_t>> param_of(Reg reg) const {
-        if (reg.kind != Reg::Kind::S) return std::nullopt;
-        for (std::size_t i = 0; i < layout_->size(); ++i) {
-            const std::uint8_t first = user_sgpr(stage_, (*layout_)[i].user_data);
-            if (reg.code < first) continue;
-            const std::uint32_t dword = static_cast<std::uint32_t>(reg.code) - first;
-            if (dword < (*layout_)[i].sgprs) return std::pair<std::size_t, std::uint32_t>{i, dword};
-        }
-        return std::nullopt;
+    std::optional<RootWord> param_of(Reg reg) const {
+        if (reg.kind != Reg::Kind::S || !spill_loads_.empty()) return std::nullopt;
+        return root_word(reg.code);
+    }
+
+    void add_spilled_roots(Resources& resources) const {
+        resources.spilled_root_loads = spill_loads_;
+        for (const auto& [value, word] : spilled_words_)
+            resources.params.emplace_back(value, word.first, word.second);
     }
 
     Address flat_address(const Inst& inst, const Operand* addr, const Operand* saddr, std::int16_t offset) const {
@@ -235,6 +238,72 @@ public:
     }
 
 private:
+    std::optional<RootWord> root_word(std::uint32_t sgpr) const {
+        for (std::size_t i = 0; i < layout_->size(); ++i) {
+            const std::uint8_t first = user_sgpr(stage_, (*layout_)[i].user_data);
+            if (sgpr >= first && sgpr - first < (*layout_)[i].sgprs)
+                return RootWord{i, sgpr - first};
+        }
+        return std::nullopt;
+    }
+
+    std::optional<RootWord> param_of(Value value) const {
+        const auto spilled = spilled_words_.find(value);
+        if (spilled != spilled_words_.end()) return spilled->second;
+        if (value.index < inputs_.size() && inputs_[value.index]) return param_of(*inputs_[value.index]);
+        return std::nullopt;
+    }
+
+    bool entry_sgpr(Term value, std::uint8_t code) const {
+        return value.kind == Term::Kind::Value && value.value.index < inputs_.size() &&
+               inputs_[value.value.index] == Reg::s(code);
+    }
+
+    void find_spilled_roots(const ComputeIo& compute) {
+        constexpr std::uint32_t kFirstSpilledRoot = 16;
+        constexpr std::uint8_t kSpillPointerUserSgprs = 4;
+        constexpr std::uint32_t kSpillPointerHighMask = 0xff;
+        if (compute.user_sgprs() != kSpillPointerUserSgprs || layout_->empty()) return;
+        std::uint32_t first_root = UINT32_MAX;
+        for (const RootParam& root : *layout_) first_root = std::min(first_root, std::uint32_t{root.user_data});
+        if (first_root != kFirstSpilledRoot) return;
+        for (std::size_t b = 0; b < p_->blocks.size(); ++b) {
+            const Block& block = p_->blocks[b];
+            for (std::size_t i = 0; i < block.insts.size(); ++i) {
+                const Inst& inst = block.insts[i];
+                const auto* fields = std::get_if<SmemFields>(&inst.fields);
+                if (!fields || !fields->data || !inst.name().starts_with("s_load_dword")) continue;
+                const auto* base = std::get_if<ScalarOperand>(&fields->base);
+                const auto* dest = std::get_if<ScalarOperand>(&*fields->data);
+                if (!base || base->dwords != 2 || !dest) continue;
+                const auto lo = inst.read(Reg::s(base->code));
+                const auto hi = inst.read(Reg::s(static_cast<std::uint8_t>(base->code + 1)));
+                const auto offset = term(inst, fields->soffset);
+                if (!lo || !hi || !offset || offset->kind != Term::Kind::Const || !entry_sgpr(origin(*lo), 0))
+                    continue;
+                const Term high = origin(*hi);
+                if (high.kind != Term::Kind::Value) continue;
+                const auto mask = sop2(high.value, {"s_and_b32"});
+                if (!mask) continue;
+                const auto& [a, c] = mask->second;
+                const Term high_mask = Term::constant_value(kSpillPointerHighMask);
+                if (!(entry_sgpr(a, 1) && c == high_mask) && !(entry_sgpr(c, 1) && a == high_mask)) continue;
+                const std::int64_t byte = std::int64_t{fields->offset} + offset->constant;
+                if (byte < 0 || byte % 4 != 0 || byte / 4 + first_root + dest->dwords > 256) continue;
+                const auto logical = first_root + static_cast<std::uint32_t>(byte / 4);
+                bool found = false;
+                for (std::uint8_t word = 0; word < dest->dwords; ++word) {
+                    const auto value = inst.write(Reg::s(static_cast<std::uint8_t>(dest->code + word)));
+                    const auto root = root_word(logical + word);
+                    if (!value || !root) continue;
+                    spilled_words_.emplace(*value, *root);
+                    found = true;
+                }
+                if (found) spill_loads_.push_back(Site{b, i});
+            }
+        }
+    }
+
     struct JoinGuard {
         std::vector<std::size_t>& joins;
         ~JoinGuard() { joins.pop_back(); }
@@ -288,11 +357,14 @@ private:
         if (value.kind == Term::Kind::Const) return Sum{std::nullopt, value.constant, std::nullopt};
         const Value v = value.value;
         const Sum dynamic{std::nullopt, 0, v};
-        if (v.index < inputs_.size() && inputs_[v.index]) {
-            const auto found = param_of(*inputs_[v.index]);
-            if (found && found->second == 0) return Sum{v, 0, std::nullopt};
-            return dynamic;
+        const auto found = param_of(v);
+        if (found && found->second == 0) {
+            const RootType::Kind kind = (*layout_)[found->first].root.kind;
+            if (!spilled_words_.contains(v) || kind == RootType::Kind::Descriptor || kind == RootType::Kind::Table ||
+                kind == RootType::Kind::ResourceHeap || kind == RootType::Kind::SamplerHeap)
+                return Sum{v, 0, std::nullopt};
         }
+        if (v.index < inputs_.size() && inputs_[v.index]) return dynamic;
         if (getpc(v)) return Sum{v, 0, std::nullopt};
         std::optional<std::array<Term, 2>> add;
         if (const auto s = sop2(v, {"s_add_u32", "s_add_i32"})) add = s->second;
@@ -367,17 +439,23 @@ private:
                            static_cast<std::uint32_t>((*pc)->machine.offset) + 4u + s.offset + extra.offset,
                            s.dynamic ? s.dynamic : extra.dynamic};
         }
-        if (base.index >= inputs_.size() || !inputs_[base.index])
-            throw TraceError{"an address not from a root parameter"};
-        const auto found = param_of(*inputs_[base.index]);
+        const auto found = param_of(base);
         if (!found) throw TraceError{"an address not from a root parameter"};
         const std::size_t param = found->first;
         std::optional<Value> high_value;
+        const bool spilled = spilled_words_.contains(base);
         switch ((*layout_)[param].root.kind) {
             case RootType::Kind::Table:
             case RootType::Kind::ResourceHeap:
             case RootType::Kind::SamplerHeap: break;
             case RootType::Kind::Descriptor: {
+                if (spilled) {
+                    const auto load = def(base);
+                    if (load)
+                        for (const auto& write : (*load)->writes)
+                            if (param_of(write.second) == RootWord{param, 1}) high_value = write.second;
+                    break;
+                }
                 const Reg reg = Reg::s(static_cast<std::uint8_t>(
                     user_sgpr(stage_, (*layout_)[param].user_data) + 1));
                 std::optional<Value> input;
@@ -390,6 +468,10 @@ private:
             default: throw TraceError{"an address from a root parameter that is no address"};
         }
         const std::optional<Value> dynamic = s.dynamic ? s.dynamic : extra.dynamic;
+        if (spilled && high.kind == Term::Kind::Value && param_of(high.value) == RootWord{param, 1})
+            return Address{param, s.offset + extra.offset, dynamic};
+        if (spilled && (*layout_)[param].root.kind == RootType::Kind::Descriptor && !high_value)
+            throw TraceError{"a root descriptor without its high half"};
         if (!high_half(high, high_value) && !(dynamic && high_value && carried(high, *high_value)))
             throw TraceError{"an address with an untracked high half"};
         return Address{param, s.offset + extra.offset, dynamic};
@@ -1301,6 +1383,8 @@ private:
     std::vector<std::optional<Site>> phis_;
     std::vector<std::optional<Reg>> inputs_;
     std::vector<Term> origin_;
+    std::map<Value, RootWord> spilled_words_;
+    std::vector<Site> spill_loads_;
     const Structured* lanes_;
     std::vector<std::size_t> rpo_;
 };
@@ -1412,10 +1496,12 @@ bool operator==(const Source& a, const Source& b) {
            a.key == b.key && a.args == b.args && a.options == b.options;
 }
 
-Resources track(const Program& program, const std::vector<RootParam>& layout, HwStage stage,
-                const Structured* lanes, std::span<const Site> ring_address_loads) {
-    const Tracer tracer(program, layout, stage, lanes);
+static Resources track_resources(const Program& program, const std::vector<RootParam>& layout, HwStage stage,
+                                 const Structured* lanes, std::span<const Site> ring_address_loads,
+                                 const ComputeIo* compute) {
+    const Tracer tracer(program, layout, stage, lanes, compute);
     Resources out;
+    tracer.add_spilled_roots(out);
     for (const auto& entry : program.inputs) {
         const auto found = tracer.param_of(entry.first);
         if (found) out.params.emplace_back(entry.second, found->first, found->second);
@@ -1458,6 +1544,8 @@ Resources track(const Program& program, const std::vector<RootParam>& layout, Hw
                         descriptor(smem->base, Role::Resource);
                     } else if (name.find("_load_") != std::string_view::npos ||
                                name.find("_store_") != std::string_view::npos) {
+                        if (std::binary_search(out.spilled_root_loads.begin(), out.spilled_root_loads.end(), site))
+                            continue;
                         if (stage == HwStage::Gs && name == "s_load_dword" &&
                             std::binary_search(ring_address_loads.begin(), ring_address_loads.end(), site))
                             continue;
@@ -1521,6 +1609,17 @@ Resources track(const Program& program, const std::vector<RootParam>& layout, Hw
         }
     }
     return out;
+}
+
+Resources track(const Program& program, const std::vector<RootParam>& layout, HwStage stage,
+                const Structured* lanes, std::span<const Site> ring_address_loads) {
+    return track_resources(program, layout, stage, lanes, ring_address_loads, nullptr);
+}
+
+Resources track(const Program& program, const NativeProgram& native, const Structured* lanes,
+                std::span<const Site> ring_address_loads) {
+    return track_resources(program, native.layout, native.stage, lanes, ring_address_loads,
+                           std::get_if<ComputeIo>(&native.io));
 }
 
 }  // namespace g6shim::shader

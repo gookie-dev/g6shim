@@ -98,6 +98,7 @@ struct Resources {
     std::vector<std::pair<Site, Address>> scalar;
     std::vector<Descriptor> descriptors;
     std::vector<std::tuple<Value, std::size_t, std::uint32_t>> params;
+    std::vector<Site> spilled_root_loads;
     Waterfall waterfall;
 
     friend bool operator==(const Resources&, const Resources&) = default;
@@ -107,6 +108,8 @@ struct Structured;
 
 Resources track(const Program& program, const std::vector<RootParam>& layout, HwStage stage,
                 const Structured* lanes, std::span<const Site> ring_address_loads = {});
+Resources track(const Program& program, const NativeProgram& native, const Structured* lanes,
+                std::span<const Site> ring_address_loads = {});
 
 std::optional<std::uint32_t> inline_constant(std::uint8_t code);
 
