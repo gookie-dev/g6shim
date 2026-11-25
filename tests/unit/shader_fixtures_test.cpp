@@ -3,10 +3,12 @@
 #include "check.hpp"
 #include "shader_lowering.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <iterator>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -31,12 +33,14 @@ constexpr std::uint8_t kConstantsSlot = 0;
 constexpr std::uint8_t kTableSlot = 1;
 constexpr std::uint32_t kUserSgprs = 5;
 constexpr std::uint32_t kUserSgprShift = 1;
+constexpr std::uint32_t kSecondDescriptorDword = 8;
+constexpr std::string_view kScalarBufferLength = "scalar_buffer_length";
 
-Lowered lower_fixture(const Fixture& fixture) {
+Lowered lower_fixture(const Fixture& fixture, const std::vector<UsedResource>& used) {
     return lower_compute(fixture.words, kFixtureVgprs,
                          {root_param(RootType::Kind::Constants, kConstantsUserData, kConstantsSlot),
                           root_param(RootType::Kind::Table, kTableUserData, kTableSlot)},
-                         {used_uav(kTableUserData, kTableSlot)}, kUserSgprs << kUserSgprShift, {1, 1, 1});
+                         used, kUserSgprs << kUserSgprShift, {1, 1, 1});
 }
 
 }  // namespace
@@ -44,10 +48,11 @@ Lowered lower_fixture(const Fixture& fixture) {
 TEST(shader_fixtures_translate_and_validate) {
     CHECK(std::size(kFixtures) > 0);
     for (const Fixture& fixture : kFixtures) {
+        if (fixture.name == kScalarBufferLength) continue;
         bool translated = true;
         Lowered lowered;
         try {
-            lowered = lower_fixture(fixture);
+            lowered = lower_fixture(fixture, {used_uav(kTableUserData, kTableSlot)});
         } catch (const std::exception& error) {
             std::printf("fixture %s did not translate: %s\n", fixture.name, error.what());
             translated = false;
@@ -60,22 +65,17 @@ TEST(shader_fixtures_translate_and_validate) {
 }
 
 TEST(shader_fixtures_translate_scalar_buffer_length_and_load) {
+    const auto fixture = std::find_if(std::begin(kFixtures), std::end(kFixtures),
+                                      [](const Fixture& entry) { return entry.name == kScalarBufferLength; });
+    CHECK(fixture != std::end(kFixtures));
+    if (fixture == std::end(kFixtures)) return;
     UsedResource input = used_uav(kTableUserData, kTableSlot);
     input.kind.kind = ResourceType::Kind::Srv;
     UsedResource output = used_uav(kTableUserData, kTableSlot);
-    output.table_offset_dwords = 8;
-    const std::vector<std::uint32_t> words{
-        0xBE850380u, 0xF4080202u, 0xFA000000u, 0xF4080302u, 0xFA000020u, 0xBF8CC07Fu,
-        0xF4200184u, 0xFA000014u, 0xBF8CC07Fu, 0x7E00020Au, 0x7E020206u,
-        0xE0700000u, 0x80030000u, 0xE0700004u, 0x80030100u, 0xBF810000u,
-    };
+    output.table_offset_dwords = kSecondDescriptorDword;
     for (const std::uint32_t stride : {0u, 1u}) {
         input.stride = stride;
-        const Lowered lowered = lower_compute(
-            words, kFixtureVgprs,
-            {root_param(RootType::Kind::Constants, kConstantsUserData, kConstantsSlot),
-             root_param(RootType::Kind::Table, kTableUserData, kTableSlot)},
-            {input, output}, kUserSgprs << kUserSgprShift, {1, 1, 1});
-        check_dxil(lowered.dxil, "scalar buffer length and load");
+        const Lowered lowered = lower_fixture(*fixture, {input, output});
+        check_dxil(lowered.dxil, fixture->name);
     }
 }

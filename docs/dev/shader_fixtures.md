@@ -6,7 +6,7 @@
 
 ## Program shape
 
-Every program has the same frame around its rule:
+Most programs use the same frame around their rule:
 
 | Part | Instructions |
 |---|---|
@@ -17,6 +17,8 @@ Every program has the same frame around its rule:
 | output | `s_waitcnt lgkmcnt(0)`, `buffer_store_dword v0, off, s[8:11], 0`, `s_endpgm` |
 
 The test lowers each program as a wave32 compute shader with 8 VGPRs, five user SGPRs (root constants at user data 0, the table at user data 4, one UAV in it) and a 1x1x1 group. `lane_mask_data` does not use the shared frame: it reads the lane index, stores a ballot, a bit count, a prefix count, a mask combined from two compares, and the active-lane count, one dword each, at the thread id.
+
+`scalar_buffer_length.s` binds an input resource at the start of the table and an output UAV at byte offset `0x20`. It stores the input length and the result of a scalar buffer load in the UAV.
 
 ## Adding a program
 

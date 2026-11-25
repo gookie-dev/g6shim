@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 gookie and g6shim contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "check.hpp"
+#include "shader_lowering.hpp"
 
 #include <algorithm>
 #include <array>
@@ -72,6 +73,21 @@ TEST(validator_signs_a_constant_colour) {
     }
     CHECK(accepted);
     CHECK(std::equal(ours.begin(), ours.end(), container.begin() + 4));
+}
+
+TEST(validator_accepts_signature_elements_sharing_a_register) {
+    Shader shader(false);
+    shader.outputs = {
+        SigElement{"TEXCOORD", 1, 0, 9, 2, 0, 2, 1, 1},
+        SigElement{"TEXCOORD", 0, 0, 9, 2, 0, 0, 1, 1},
+    };
+    for (std::uint32_t id = 0; id < shader.outputs.size(); ++id) {
+        const V value = shader.m.f32(std::bit_cast<std::uint32_t>(1.0f));
+        shader.op(shader.entry, "storeOutput.f32", Attr::NoUnwind, shader.t.void_type, 5,
+                  {shader.m.i32(id), shader.m.i32(0), shader.m.i8(0), value});
+    }
+    shader.m.terminate(shader.entry, Term::ret());
+    g6shim::test::lowering::check_dxil(shader.finish(), "signature elements sharing a register");
 }
 
 }  // namespace

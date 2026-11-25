@@ -17,6 +17,7 @@ namespace g6shim::shader::emit {
 namespace {
 
 constexpr std::uint64_t kCodeCbvSize = 0x1'0000;
+constexpr std::pair<std::uint32_t, std::uint32_t> kRawBufferSrv{11, 0};
 
 bool strip(std::string_view text, std::string_view prefix, std::string_view* rest) {
     if (!text.starts_with(prefix)) return false;
@@ -510,7 +511,7 @@ void Lower::smem(const IrInst& inst, Site site) {
         return;
     }
     if (kind != nullptr && kind->kind.kind == ResourceType::Kind::Srv) {
-        const V h = handle(site, src, false, {11, 0});
+        const V h = handle(site, src, false, kRawBufferSrv);
         for (std::uint32_t k = 0; k < count; ++k) {
             const V off = s_.m.i32(4 * k);
             const V at = s_.m.bin(c, Bin::Add, addr, off);
@@ -613,7 +614,7 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
             fail("a constant buffer's descriptor read as data");
     } else if (std::holds_alternative<SmemFields>(ui.fields) && un.starts_with("s_buffer_load_dword") &&
                used != nullptr && used->kind.kind == ResourceType::Kind::Srv) {
-        props = {11, 0};
+        props = kRawBufferSrv;
     } else {
         fail("a scalar memory read as data");
     }

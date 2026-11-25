@@ -172,8 +172,8 @@ std::vector<std::uint8_t> signature(std::span<const SigElement> elements, bool i
     append_u32(out, static_cast<std::uint32_t>(elements.size()));
     append_u32(out, 8);
 
-    std::vector<std::uint32_t> offsets;
-    offsets.reserve(elements.size());
+    std::vector<std::uint32_t> name_offsets;
+    name_offsets.reserve(elements.size());
     std::uint32_t next = 8 + kSignatureRowSize * static_cast<std::uint32_t>(elements.size());
     std::vector<const std::string*> names;
     for (std::size_t i = 0; i < elements.size(); ++i) {
@@ -188,9 +188,9 @@ std::vector<std::uint8_t> signature(std::span<const SigElement> elements, bool i
             }
         }
         if (shared) {
-            offsets.push_back(offsets[*shared]);
+            name_offsets.push_back(name_offsets[*shared]);
         } else {
-            offsets.push_back(next);
+            name_offsets.push_back(next);
             next += static_cast<std::uint32_t>(element.name.size()) + 1;
             names.push_back(&element.name);
         }
@@ -198,16 +198,16 @@ std::vector<std::uint8_t> signature(std::span<const SigElement> elements, bool i
 
     std::vector<std::size_t> order(elements.size());
     std::iota(order.begin(), order.end(), 0);
-    std::stable_sort(order.begin(), order.end(), [&elements](std::size_t a, std::size_t b) {
+    std::stable_sort(order.begin(), order.end(), [&elements, &name_offsets](std::size_t a, std::size_t b) {
         const std::uint32_t row_a = elements[a].row.value_or(UINT32_MAX);
         const std::uint32_t row_b = elements[b].row.value_or(UINT32_MAX);
         if (row_a != row_b) return row_a < row_b;
-        return elements[a].col < elements[b].col;
+        return name_offsets[a] < name_offsets[b];
     });
 
     for (const std::size_t i : order) {
         const SigElement& element = elements[i];
-        const std::uint32_t offset = offsets[i];
+        const std::uint32_t offset = name_offsets[i];
         const std::uint8_t used = static_cast<std::uint8_t>(element.usage << element.col);
         const std::uint8_t rw = input ? used : static_cast<std::uint8_t>(~used & 0x0F);
         append_u32(out, 0);
