@@ -84,7 +84,11 @@ std::uint64_t fnv(std::span<const std::uint8_t> bytes) {
 std::vector<bool> live_by_passes(const Module& m) {
     std::vector<bool> live(m.instructions().size(), false);
     for (const Block& block : m.blocks()) {
-        for (const std::uint32_t index : block.body) live[index] = true;
+        for (const std::uint32_t index : block.body) {
+            const auto kind = m.instructions()[index].op.kind;
+            live[index] = kind == BitOp::Kind::Call || kind == BitOp::Kind::Load || kind == BitOp::Kind::Store ||
+                          kind == BitOp::Kind::AtomicRmw || kind == BitOp::Kind::CmpXchg;
+        }
         if (block.term && block.term->kind == Term::Kind::CondBr &&
             block.term->condition.kind == V::Kind::Inst)
             live[block.term->condition.index] = true;
@@ -148,6 +152,8 @@ TEST(bitcode_unread_phis_are_dropped) {
     m.set_phi(cycle_a, {{cycle_b, entry}});
     m.set_phi(cycle_b, {{cycle_a, entry}});
     const V sum = m.bin(join, Bin::Add, read, b);
+    const V output = m.function("output", m.func_ty(m.void_type(), {i32t}), Attr::NoUnwind, false);
+    m.call(join, output, {sum});
     m.terminate(join, Term::ret());
     const std::vector<bool> live = m.live();
     CHECK(live[read.index] && live[sum.index]);
@@ -164,7 +170,33 @@ TEST(bitcode_successors_of_each_terminator) {
     CHECK(branch.size() == 2 && branch[0] == 3 && branch[1] == 5);
 }
 
-TEST(bitcode_written_bytes_unchanged) {
+TEST(bitcode_omits_unused_arithmetic_without_dropping_effects) {
+    const auto make = [](bool add_dead_work) {
+        Module m;
+        const Ty integer = m.int_type(32);
+        const Ty no_result = m.void_type();
+        const V effect = m.function("effect", m.func_ty(no_result, {integer}), Attr::NoUnwind, false);
+        m.function("main", m.func_ty(no_result, {}), std::nullopt, true);
+        const auto block = m.new_block();
+        const V one = m.i32(1);
+        const V two = m.i32(2);
+        m.int_type(1);
+        if (add_dead_work) {
+            const V sum = m.bin(block, Bin::Add, one, two);
+            m.cmp(block, pred::kEq, sum, two);
+        }
+        const V argument = m.bin(block, Bin::Sub, two, one);
+        m.call(block, effect, {argument});
+        m.terminate(block, Term::ret());
+        return m;
+    };
+    const Module with_dead_work = make(true);
+    const auto live = with_dead_work.live();
+    CHECK(live == (std::vector<bool>{false, false, true, true}));
+    CHECK(with_dead_work.write() == make(false).write());
+}
+
+TEST(bitcode_written_bytes_are_deterministic) {
     struct Pin {
         std::size_t regs;
         std::size_t stages;
@@ -173,7 +205,7 @@ TEST(bitcode_written_bytes_unchanged) {
         std::uint64_t hash;
     };
     const Pin pins[] = {{64, 64, 64, 38'916, 0x9586'730c'f953'4a45u},
-                        {128, 256, 32, 295'952, 0x89e5'de2d'64f0'8785u}};
+                        {128, 256, 32, 253'648, 0x0bd0'fe56'66b8'6f78u}};
     for (const Pin& pin : pins) {
         const std::vector<std::uint8_t> bytes = synthetic(pin.regs, pin.stages, pin.read).write();
         CHECK(bytes.size() == pin.length);

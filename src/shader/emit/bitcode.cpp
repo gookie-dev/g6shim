@@ -560,9 +560,16 @@ std::vector<bool> Module::live() const {
         }
     };
     for (const Block& block : blocks_) {
-        for (const std::uint32_t index : block.body) mark(V::inst(index));
+        for (const std::uint32_t index : block.body) {
+            const auto kind = insts_[index].op.kind;
+            if (kind == BitOp::Kind::Call || kind == BitOp::Kind::Load || kind == BitOp::Kind::Store ||
+                kind == BitOp::Kind::AtomicRmw || kind == BitOp::Kind::CmpXchg)
+                mark(V::inst(index));
+        }
         if (block.term && block.term->kind == Term::Kind::CondBr) mark(block.term->condition);
     }
+    for (const MdDef& def : mds_)
+        if (def.kind == MdDef::Kind::Value) mark(def.value);
     while (!work.empty()) {
         const std::uint32_t index = work.back();
         work.pop_back();
@@ -735,7 +742,7 @@ std::vector<std::uint8_t> Module::write() const {
         for (const std::uint32_t i : block.phis)
             if (live[i] && !is_void(insts_[i].type)) ids[i] = next++;
         for (const std::uint32_t i : block.body)
-            if (!is_void(insts_[i].type)) ids[i] = next++;
+            if (live[i] && !is_void(insts_[i].type)) ids[i] = next++;
     }
     const auto absolute = [&](V value) -> std::uint32_t {
         switch (value.kind) {
@@ -858,7 +865,8 @@ std::vector<std::uint8_t> Module::write() const {
         const Block& block = blocks_[b];
         for (const std::uint32_t i : block.phis)
             if (live[i]) instruction(i);
-        for (const std::uint32_t i : block.body) instruction(i);
+        for (const std::uint32_t i : block.body)
+            if (live[i]) instruction(i);
         if (!block.term) throw std::logic_error("unterminated block");
         const Term& term = *block.term;
         switch (term.kind) {

@@ -282,6 +282,8 @@ private:
     std::map<DescriptorMask, V> masked_descriptor_phis_;
     std::vector<std::tuple<Value, std::uint32_t, V>> pending_descriptor_phis_;
     std::optional<V> user_data_;
+    std::map<std::uint32_t, V> user_data_rows_;
+    std::map<std::uint32_t, V> user_data_words_;
     std::map<std::uint32_t, UserData> user_reads_;
     std::vector<std::array<std::uint32_t, 4>> samplers_;
     std::map<std::pair<Site, bool>, const Source*> descriptors_;

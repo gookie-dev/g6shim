@@ -1062,18 +1062,22 @@ Val Lower::descriptor_address(UserData data) {
 }
 
 Val Lower::user_dword(std::uint32_t index) {
+    if (const auto word = user_data_words_.find(index); word != user_data_words_.end())
+        return Val::i32(word->second);
     s_.user_data = std::max(s_.user_data, index + 1);
-    V h;
-    if (user_data_) {
-        h = *user_data_;
-    } else {
-        h = s_.user_data_handle();
-        user_data_ = h;
-    }
+    if (!user_data_) user_data_ = s_.user_data_handle();
     const std::size_t entry = s_.entry;
-    const V row = s_.m.i32(index / 4);
-    const V r = s_.op(entry, "cbufferLoadLegacy.i32", Attr::ReadOnly, s_.t.cbuf_ret, 59, {h, row});
-    return Val::i32(s_.m.extract(entry, r, index % 4));
+    const std::uint32_t row = index / 4;
+    auto loaded = user_data_rows_.find(row);
+    if (loaded == user_data_rows_.end()) {
+        const V row_id = s_.m.i32(row);
+        const V values = s_.op(entry, "cbufferLoadLegacy.i32", Attr::ReadOnly, s_.t.cbuf_ret, 59,
+                               {*user_data_, row_id});
+        loaded = user_data_rows_.emplace(row, values).first;
+    }
+    const V word = s_.m.extract(entry, loaded->second, index % 4);
+    user_data_words_.emplace(index, word);
+    return Val::i32(word);
 }
 
 V Lower::mask_dword(Value v) {
