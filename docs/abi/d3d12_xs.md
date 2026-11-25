@@ -81,6 +81,8 @@ A subobject holds its type at +0, its data at +4, or at +8 when the data holds a
 
 When a shader reads the low address word of a scalar buffer descriptor at a fixed table offset, the draw supplies the title-facing address in a stage user-data constant. A constant buffer uses its view address. A shader-resource buffer uses its resource address plus the view's first-element offset. The draw reads the source table before mirroring descriptors into the host heap.
 
+Constant-buffer views also supply word 1 with the high address bits and a 16-byte stride, word 2 with the count of 16-byte records, and word 3 with identity component selectors, unsigned 32-bit format, resource level 1 and index bounds. A zero-address, zero-size constant-buffer view supplies zero for all words. These encodings were observed in synthetic SDK-created views on device `1002:744C`.
+
 Masked scalar reads can use buffer descriptor word 1 bits 15:0 for the upper address bits and word 3 bits 11:0 for the four component selectors. The draw derives the selectors from the view's component mapping. An unbound buffer supplies zero for both fields.
 
 For a structured buffer, word 1 bits 29:16 come from the view's nonzero byte stride. A comparison of that word against zero uses the packed address and stride. A bound structured view always has a nonzero stride and an unbound descriptor is all zero.

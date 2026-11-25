@@ -37,6 +37,7 @@ constexpr std::uint32_t kSecondDescriptorDword = 8;
 constexpr std::string_view kScalarBufferLength = "scalar_buffer_length";
 constexpr std::string_view kScalarBufferAddress = "scalar_buffer_address";
 constexpr std::string_view kScalarBufferFields = "scalar_buffer_fields";
+constexpr std::string_view kScalarConstantBufferWords = "scalar_constant_buffer_words";
 constexpr std::string_view kScalarStructuredFields = "scalar_structured_fields";
 constexpr std::string_view kScalarRawHighWord = "scalar_raw_buffer_high_word";
 constexpr std::string_view kScalarTypedFormat = "scalar_typed_buffer_format";
@@ -63,7 +64,7 @@ TEST(shader_fixtures_translate_and_validate) {
         if (fixture.name == kScalarBufferLength || fixture.name == kScalarBufferAddress ||
             fixture.name == kScalarBufferFields || fixture.name == kScalarStructuredFields ||
             fixture.name == kScalarRawHighWord || fixture.name == kScalarTypedFormat ||
-            fixture.name == kScalarImageAddress)
+            fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -117,6 +118,34 @@ TEST(shader_fixtures_translate_scalar_buffer_address_at_a_join) {
             CHECK(address->dword == 0);
         }
         check_dxil(lowered.dxil, fixture->name);
+    }
+}
+
+TEST(shader_fixtures_translate_scalar_constant_buffer_words) {
+    const Fixture* fixture = find_fixture(kScalarConstantBufferWords);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    UsedResource input = used_uav(kTableUserData, kTableSlot);
+    input.kind.kind = ResourceType::Kind::Cbv;
+    UsedResource output = used_uav(kTableUserData, kTableSlot);
+    output.table_offset_dwords = kSecondDescriptorDword;
+    try {
+        const Lowered lowered = lower_fixture(*fixture, {input, output});
+        using Source = UserData::Source;
+        for (const Source source : {Source::ConstantBufferHighWord, Source::ConstantBufferRecordCount,
+                                    Source::ConstantBufferFormatWord}) {
+            const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(),
+                                            [source](const UserData& entry) { return entry.source == source; });
+            CHECK(field != lowered.user_data.end());
+            if (field != lowered.user_data.end()) {
+                CHECK(field->slot == kTableSlot);
+                CHECK(field->dword == 0);
+            }
+        }
+        check_dxil(lowered.dxil, fixture->name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
     }
 }
 

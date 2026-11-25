@@ -29,6 +29,8 @@ constexpr std::uint32_t kImageBaseAddressShift = 8;
 constexpr std::uint32_t kBufferResourceLevel = 1u << 24;
 constexpr std::uint32_t kBufferIndexBounds = 1u << 28;
 constexpr std::uint32_t kBufferByteBounds = 3u << 28;
+constexpr std::uint32_t kBufferIdentitySelectors = 4u | (5u << 3) | (6u << 6) | (7u << 9);
+constexpr std::uint32_t kBufferUint32Format = 20u << 12;
 constexpr std::uint32_t kDepthUnorderedFlags = 0x7;
 constexpr std::uint32_t kTextureViews = 2;
 constexpr std::uint32_t kTextureViewsEnd = 10;
@@ -807,6 +809,24 @@ std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, 
     return buffer->address;
 }
 
+std::optional<std::array<std::uint32_t, 3>> table_constant_buffer_words(const descriptor::Heap& heap,
+                                                                       std::uint64_t table, std::uint32_t dword) {
+    const auto view = table_view(heap, table, dword);
+    if (!view) return std::nullopt;
+    const auto* buffer = std::get_if<descriptor::ConstantView>(&*view);
+    if (buffer == nullptr) return std::nullopt;
+    if (buffer->address == 0 && buffer->size == 0) return std::array<std::uint32_t, 3>{};
+    constexpr std::uint32_t kRecordBytes = 4 * sizeof(std::uint32_t);
+    if (buffer->address == 0 || buffer->size == 0 || buffer->size % kRecordBytes != 0 ||
+        buffer->size / kRecordBytes > D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT)
+        return std::nullopt;
+
+    using UserData = g6shim::shader::emit::UserData;
+    const std::uint32_t high = static_cast<std::uint32_t>(buffer->address >> 32) & UserData::kBufferAddressHighMask;
+    return std::array{high | (kRecordBytes << UserData::kBufferStrideShift), buffer->size / kRecordBytes,
+                      kBufferIdentitySelectors | kBufferUint32Format | kBufferResourceLevel | kBufferIndexBounds};
+}
+
 std::optional<std::uint32_t> table_structured_buffer_high_word(const descriptor::Heap& heap, std::uint64_t table,
                                                               std::uint32_t dword) {
     const auto view = table_view(heap, table, dword);
@@ -845,9 +865,7 @@ std::optional<std::uint32_t> table_untyped_buffer_format_word(const descriptor::
     if (structured ? !structured_buffer_stride(*desc) : !linear_raw_buffer(*desc)) return std::nullopt;
     const auto address = shader_buffer_address(*view);
     if (!address || (!structured && *address % D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT != 0)) return std::nullopt;
-    constexpr std::uint32_t kIdentitySelectors = 4u | (5u << 3) | (6u << 6) | (7u << 9);
-    constexpr std::uint32_t kUint32Format = 20u << 12;
-    return kIdentitySelectors | kUint32Format | kBufferResourceLevel |
+    return kBufferIdentitySelectors | kBufferUint32Format | kBufferResourceLevel |
            (structured ? kBufferIndexBounds : kBufferByteBounds);
 }
 

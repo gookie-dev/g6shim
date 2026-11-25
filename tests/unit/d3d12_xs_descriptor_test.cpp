@@ -135,6 +135,17 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     CHECK(!table_buffer_address(heap, table, kSlotDwords + 1, false));
     CHECK(!table_buffer_address(heap, table + 4, 0, true));
     CHECK(!table_buffer_address(heap, table, 3 * kSlotDwords, false));
+    using descriptor_host::table_constant_buffer_words;
+    CHECK((table_constant_buffer_words(heap, table, 0) == std::array{0x0010'0001u, 16u, 0x1101'4facu}));
+    CHECK(!table_constant_buffer_words(heap, table, kSlotDwords));
+    CHECK(!table_constant_buffer_words(heap, table, 1));
+    const std::array<std::uint32_t, 4> null_constant{};
+    descriptor::create_cbv(nullptr, null_constant.data(), table + 2 * step);
+    CHECK((table_constant_buffer_words(heap, table, 2 * kSlotDwords) == std::array{0u, 0u, 0u}));
+    const std::array<std::uint32_t, 4> unsized_constant{0x1122'0000, 1, 17, 0};
+    descriptor::create_cbv(nullptr, unsized_constant.data(), table + 2 * step);
+    CHECK(!table_constant_buffer_words(heap, table, 2 * kSlotDwords));
+    descriptor::create_srv(nullptr, nullptr, shader_words.data(), table + 2 * step);
     using descriptor_host::table_buffer_component_mapping;
     CHECK(table_buffer_component_mapping(heap, table, kSlotDwords) == 0x847u);
     CHECK(table_buffer_component_mapping(heap, table, 2 * kSlotDwords) == 0u);

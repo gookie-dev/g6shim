@@ -668,10 +668,14 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
     const bool scalar_buffer = std::holds_alternative<SmemFields>(ui.fields) && un.starts_with("s_buffer_load_dword");
     const bool scalar_srv = scalar_buffer && used != nullptr && used->kind.kind == ResourceType::Kind::Srv;
     if (scalar_buffer && used != nullptr && used->kind.kind == ResourceType::Kind::Cbv) {
+        using SourceKind = UserData::Source;
+        constexpr std::array kWords{SourceKind::ConstantBufferAddressLow, SourceKind::ConstantBufferHighWord,
+                                    SourceKind::ConstantBufferRecordCount, SourceKind::ConstantBufferFormatWord};
         for (std::uint32_t k = 0; k < count; ++k) {
             const auto v = inst.write(Reg::s(static_cast<std::uint8_t>(code + k)));
             if (!v) continue;
-            if (k == first && defer_descriptor_address(*v, src, *used, UserData::Source::ConstantBufferAddressLow))
+            const std::uint32_t word = k - first;
+            if (word < kWords.size() && defer_descriptor_address(*v, src, *used, kWords[word]))
                 continue;
             vals_[*v] = Val::missing("a scalar memory read as data");
         }

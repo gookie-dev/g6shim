@@ -2,8 +2,11 @@
 
 ## add Functional
 
-- Scalar reads of a constant-buffer descriptor expose the low address word at a fixed table offset. Reads of the other address bits, record count or format still fail.
-  Closes when: the host supplies the descriptor fields and the translator verifies the result with synthetic tests.
+- Scalar reads of a constant-buffer descriptor expose all four words at a fixed table offset. Reads through dynamic table offsets still fail.
+  Closes when: the host can supply the descriptor fields through a dynamic table offset.
+  Title IDs: 7952987A
+- Scalar reads of the upper word of a buffer descriptor picked by a shader-computed resource heap index still fail. The stride may vary with the selected view.
+  Closes when: the shader can read descriptor word 1 from the selected heap slot.
   Title IDs: 7952987A
 - Scalar shader-resource descriptor reads expose the buffer length and address at a fixed table offset. Ordinary linear raw and structured views and the supported typed formats also expose the complete high address and format words. Other view kinds expose only the fields the host can derive.
   Closes when: the translator can recover those fields from the bound resource.

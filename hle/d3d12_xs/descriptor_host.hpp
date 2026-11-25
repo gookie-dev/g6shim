@@ -11,6 +11,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -78,6 +79,8 @@ bool view_is_buffer(const descriptor::View& view);
 std::optional<std::pair<std::uint64_t, std::uint64_t>> buffer_range(const descriptor::View& view);
 std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, std::uint64_t table,
                                                   std::uint32_t dword, bool constant_buffer);
+std::optional<std::array<std::uint32_t, 3>> table_constant_buffer_words(const descriptor::Heap& heap,
+                                                                       std::uint64_t table, std::uint32_t dword);
 std::optional<std::uint32_t> table_linear_raw_buffer_high_word(const descriptor::Heap& heap, std::uint64_t table,
                                                               std::uint32_t dword);
 std::optional<std::uint32_t> table_structured_buffer_high_word(const descriptor::Heap& heap, std::uint64_t table,

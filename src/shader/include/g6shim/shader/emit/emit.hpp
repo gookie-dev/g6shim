@@ -25,7 +25,8 @@ struct UserData {
         Root, ConstantBufferAddressLow, ShaderBufferAddressLow, ImageBaseAddressLow,
         ShaderBufferAddressHigh, ShaderBufferComponentMapping, StructuredBufferHighWord,
         LinearRawBufferHighWord, LinearRawBufferFormatWord, StructuredBufferFormatWord,
-        ImageSamplingFields, TypedBufferFormatWord, TypedBufferHighWord
+        ImageSamplingFields, TypedBufferFormatWord, TypedBufferHighWord,
+        ConstantBufferHighWord, ConstantBufferRecordCount, ConstantBufferFormatWord
     };
 
     std::uint32_t index = 0;

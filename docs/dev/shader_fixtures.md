@@ -22,6 +22,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `scalar_buffer_address.s` uses the same bindings. A branch joins the low address word with a zero value before the store. The test uses both shader-resource and constant-buffer input views.
 
+`scalar_constant_buffer_words.s` stores a constant buffer's high address, record count and format words alongside the result of a scalar load through the same descriptor.
+
 `scalar_buffer_fields.s` joins two descriptor words with zero and masks out their address or component selector bits. An unused read outside the known bits leaves those results intact. The negative case returns a value that depends on an unavailable stride bit.
 
 `scalar_structured_fields.s` masks and extracts stride bits from a structured descriptor word, compares it with zero and converts the top format byte to float.

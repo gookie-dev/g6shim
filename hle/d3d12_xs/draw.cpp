@@ -333,6 +333,13 @@ std::optional<std::uint32_t> State::descriptor_value(
     if (data.source == Source::TypedBufferFormatWord || data.source == Source::TypedBufferHighWord)
         return descriptor_host::table_typed_buffer_word(
             *heap, root.value, data.dword, data.source == Source::TypedBufferHighWord);
+    if (data.source >= Source::ConstantBufferHighWord && data.source <= Source::ConstantBufferFormatWord) {
+        const auto words = descriptor_host::table_constant_buffer_words(*heap, root.value, data.dword);
+        if (!words) return std::nullopt;
+        const auto word = static_cast<std::uint32_t>(data.source) -
+                          static_cast<std::uint32_t>(Source::ConstantBufferHighWord);
+        return (*words)[word];
+    }
     if (data.source == Source::ShaderBufferComponentMapping)
         return descriptor_host::table_buffer_component_mapping(*heap, root.value, data.dword);
     if (data.source == Source::StructuredBufferHighWord)
