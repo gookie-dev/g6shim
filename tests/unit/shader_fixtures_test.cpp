@@ -104,19 +104,24 @@ TEST(shader_fixtures_translate_biased_sample_with_packed_coordinates) {
     constexpr std::uint8_t kSamplerUserData = 6;
     constexpr std::uint8_t kSamplerSlot = 2;
     NativeProgram native;
-    native.stage = HwStage::Ps;
     native.vgprs = kFixtureVgprs;
-    native.io = PsIo{};
     native.layout = {root_param(RootType::Kind::Table, kTableUserData, kTableSlot),
                      root_param(RootType::Kind::SamplerHeap, kSamplerUserData, kSamplerSlot)};
     native.used = {texture, output};
     native.code = bytes_of(fixture->words);
-    try {
-        const Lowered lowered = lower_native(native);
-        check_dxil(lowered.dxil, fixture->name);
-    } catch (const std::exception& error) {
-        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
-        CHECK(false);
+    for (const HwStage stage : {HwStage::Ps, HwStage::Cs}) {
+        native.stage = stage;
+        if (stage == HwStage::Ps)
+            native.io = PsIo{};
+        else
+            native.io = ComputeIo{(kSamplerUserData + 1u) << kUserSgprShift, {32, 1, 1}};
+        try {
+            const Lowered lowered = lower_native(native);
+            check_dxil(lowered.dxil, stage == HwStage::Ps ? fixture->name : "image_sample_compute");
+        } catch (const std::exception& error) {
+            std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+            CHECK(false);
+        }
     }
 }
 

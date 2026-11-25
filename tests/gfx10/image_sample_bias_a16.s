@@ -9,6 +9,8 @@ v_mov_b32 v0, 0x7e003c00
 v_mov_b32 v3, 0x38003400
 s_waitcnt lgkmcnt(0)
 image_sample_b v2, [v0,v3], s[8:15], s[16:19] dmask:0x1 dim:SQ_RSRC_IMG_2D a16
+image_sample v4, v3, s[8:15], s[16:19] dmask:0x1 dim:SQ_RSRC_IMG_2D a16
 s_waitcnt vmcnt(0)
 buffer_store_dword v2, off, s[20:23], 0
+buffer_store_dword v4, off, s[20:23], 0 offset:4
 s_endpgm

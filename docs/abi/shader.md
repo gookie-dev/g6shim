@@ -304,6 +304,8 @@ Each part is a FourCC[4], a size u32 and the part body. A container is its first
 
 Shader kinds: 0 ps, 1 vs, 2 gs, 3 hs, 4 ds, 5 cs, 13 ms, 14 as.
 
+The emitter uses validator version 1.8 for compute shaders that sample with implicit LOD. Their `PSV0` runtime info adds the entry point's string table offset after the thread group dimensions. The shader model remains 6.6.
+
 A console container's `DXIL` part can hold a placeholder instead of LLVM bitcode. The kind always comes from the version word; the code is the native program the `XDAT` index lists.
 
 ## Native program index

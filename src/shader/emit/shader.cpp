@@ -16,6 +16,7 @@ namespace g6shim::shader::emit {
 namespace {
 
 constexpr std::string_view kMagic = "DXIL";
+constexpr char kEntryName[] = "main";
 constexpr std::uint32_t kDxilHeaderSize = 24;
 constexpr std::uint32_t kDxilVersion = 0x106;
 constexpr std::uint32_t kBitcodeOffset = 16;
@@ -33,6 +34,10 @@ constexpr std::uint32_t kFeatureAtomicInt64OnTypedResource = 0x400000;
 constexpr std::uint32_t kFeatureAtomicInt64OnHeapResource = 0x10000000;
 constexpr std::uint32_t kComparisonSampler = 0x8000;
 constexpr std::uint32_t kUnallocatedRow = UINT32_MAX;
+constexpr std::uint32_t kSample = 60;
+constexpr std::uint32_t kSampleBias = 61;
+constexpr std::uint32_t kSampleCmp = 64;
+constexpr std::uint32_t kCalculateLod = 81;
 constexpr std::uint32_t kGsStateTag = 1;
 
 void append_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
@@ -70,7 +75,7 @@ Shader::Shader(bool pixel_shader) : pixel(pixel_shader) {
     const Ty res_ret = m.named_struct("dx.types.ResRet.f32", {f32, f32, f32, f32, i32});
     const Ty main_ty = m.func_ty(void_type, {});
     m.ptr(main_ty);
-    main = m.function("main", main_ty, std::nullopt, true);
+    main = m.function(kEntryName, main_ty, std::nullopt, true);
     entry = m.new_block();
     t = Types{void_type, i1, i32, f32, handle, props, bind, cbuf_ret, res_ret};
 }
@@ -85,6 +90,8 @@ V Shader::lds() {
 
 V Shader::op(std::size_t block, const std::string& name, Attr attr, Ty ret, std::uint32_t opcode,
              const std::vector<V>& args) {
+    if (opcode == kSample || opcode == kSampleBias || opcode == kSampleCmp || opcode == kCalculateLod)
+        uses_implicit_lod_ = true;
     std::vector<Ty> params = {t.i32};
     params.reserve(params.size() + args.size());
     for (const V arg : args) params.push_back(m.type_of(arg));
@@ -352,7 +359,7 @@ std::vector<std::uint8_t> Shader::finish() {
     if (!props.empty()) props_node = m.md_node(std::move(props));
 
     const Md main_md = m.md_value(main);
-    const Md name = m.md_str("main");
+    const Md name = m.md_str(kEntryName);
     const Md entry_node = m.md_node({main_md, name, signatures, resources, props_node});
 
     const Md ident_text = m.md_str("g6shim");
@@ -362,7 +369,12 @@ std::vector<std::uint8_t> Shader::finish() {
     const Md six = i32c(6);
     const Md version = m.md_node({one, six});
     m.named_md("dx.version", {version});
-    m.named_md("dx.valver", {version});
+    constexpr std::uint32_t kComputeImplicitLodValidatorMinor = 8;
+    const bool compute_implicit_lod = threads && !mesh && uses_implicit_lod_;
+    const Md validator_version = compute_implicit_lod
+                                     ? m.md_node({one, i32c(kComputeImplicitLodValidatorMinor)})
+                                     : version;
+    m.named_md("dx.valver", {validator_version});
 
     const char* program_name = "vs";
     std::uint32_t program_kind = 1;
@@ -435,6 +447,7 @@ std::vector<std::uint8_t> Shader::finish() {
         bindings,
         threads.value_or(std::array<std::uint32_t, 3>{0, 0, 0}),
         wave_size,
+        compute_implicit_lod ? std::string_view{kEntryName} : std::string_view{},
     };
     const std::vector<std::uint8_t> psv0 = psv(psv_data);
     const std::array<std::uint8_t, 20> container_hash{};

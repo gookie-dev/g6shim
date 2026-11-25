@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -67,6 +68,7 @@ struct Psv {
     std::span<const Binding> bindings;
     std::array<std::uint32_t, 3> threads{};
     std::optional<std::uint32_t> wave_size;
+    std::string_view entry_name{};
 };
 
 std::vector<std::uint8_t> psv(const Psv& p);

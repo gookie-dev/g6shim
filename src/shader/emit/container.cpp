@@ -234,7 +234,6 @@ std::vector<std::uint8_t> psv(const Psv& p) {
     const std::uint32_t out_vectors = vector_count(p.outputs);
 
     std::vector<std::uint8_t> out;
-    append_u32(out, 48);
     std::array<std::uint8_t, 48> info{};
     info[0] = p.flag ? 1 : 0;
     if (p.stage == 0) {
@@ -285,7 +284,13 @@ std::vector<std::uint8_t> psv(const Psv& p) {
         info[27] = mesh.topology;
         info[30] = static_cast<std::uint8_t>(p.prims.size());
     }
+    const bool named_entry = !p.entry_name.empty();
+    const std::uint32_t info_size = static_cast<std::uint32_t>(info.size()) +
+                                    (named_entry ? static_cast<std::uint32_t>(sizeof(std::uint32_t)) : 0u);
+    append_u32(out, info_size);
     out.insert(out.end(), info.begin(), info.end());
+    const std::size_t entry_offset = out.size();
+    if (named_entry) append_u32(out, 0);
 
     append_u32(out, static_cast<std::uint32_t>(p.bindings.size()));
     if (!p.bindings.empty()) {
@@ -341,6 +346,11 @@ std::vector<std::uint8_t> psv(const Psv& p) {
     for (const SigElement& element : p.outputs) add_element(element);
     for (const SigElement& element : p.prims) add_element(element);
 
+    if (named_entry) {
+        write_u32(out, entry_offset, static_cast<std::uint32_t>(strings.size()));
+        strings.insert(strings.end(), p.entry_name.begin(), p.entry_name.end());
+        strings.push_back(0);
+    }
     strings.resize((strings.size() + 3) / 4 * 4, 0);
     append_u32(out, static_cast<std::uint32_t>(strings.size()));
     out.insert(out.end(), strings.begin(), strings.end());

@@ -86,6 +86,7 @@ private:
     std::optional<Md> signature_md(std::vector<SigElement> elements);
 
     std::optional<V> lds_;
+    bool uses_implicit_lod_ = false;
 };
 
 }  // namespace g6shim::shader::emit
