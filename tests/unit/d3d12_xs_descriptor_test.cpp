@@ -293,6 +293,39 @@ TEST(d3d12_xs_table_image_address_uses_the_title_base) {
     release(object);
 }
 
+TEST(d3d12_xs_sampler_lod_word_uses_the_bound_descriptor) {
+    constexpr std::uint32_t kSlotDwords = 4;
+    const descriptor::HeapDesc desc{descriptor::kSamplersKind, 3, descriptor::kShaderVisible, 0};
+    const descriptor::Placement none{0, 0};
+    Object* object = nullptr;
+    CHECK(create_heap_with(desc, none, &object) == S_OK);
+    if (object == nullptr) return;
+    const auto& heap = *static_cast<descriptor::Heap*>(object);
+    const auto step = descriptor::increment_size(nullptr, desc.kind);
+    D3D12_SAMPLER_DESC sampler{};
+    sampler.MinLOD = 1.25f;
+    sampler.MaxLOD = 9.5f;
+    std::array<std::uint32_t, 13> words{};
+    std::memcpy(words.data(), &sampler, sizeof sampler);
+    descriptor::create_sampler(nullptr, words.data(), heap.start + step);
+    using descriptor_host::sampler_lod_word;
+    CHECK(sampler_lod_word(heap, kSlotDwords) == 0x0098'0140u);
+
+    sampler.MinLOD = 1.003f;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    std::memcpy(words.data(), &sampler, sizeof sampler);
+    descriptor::create_sampler(nullptr, words.data(), heap.start + step);
+    CHECK(sampler_lod_word(heap, kSlotDwords) == 0x00FF'F100u);
+    CHECK(!sampler_lod_word(heap, 1));
+    CHECK(!sampler_lod_word(heap, 0));
+    CHECK(!sampler_lod_word(heap, 3 * kSlotDwords));
+
+    const std::array<std::uint32_t, 27> extended{};
+    descriptor::create_sampler_x(nullptr, extended.data(), heap.start + 2 * step);
+    CHECK(!sampler_lod_word(heap, 2 * kSlotDwords));
+    release(object);
+}
+
 TEST(d3d12_xs_placed_heaps_start_at_the_title_memory) {
     std::vector<std::uint8_t> memory(64 * 32);
     const auto address = reinterpret_cast<std::uint64_t>(memory.data());

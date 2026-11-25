@@ -23,6 +23,8 @@ constexpr std::uint32_t kResourceDescriptorBytes = 32;
 constexpr std::uint32_t kBufferRecordCountWord = 2;
 constexpr std::uint32_t kImageWidthLowWord = 1;
 constexpr std::uint32_t kImageDimensionsWord = 2;
+constexpr std::uint32_t kSamplerDescriptorBytes = 16;
+constexpr std::uint32_t kSamplerLodWord = 1;
 constexpr std::uint32_t kImageWord5ReservedMask = 0xff00'0000;
 constexpr Why kDescriptorData = "a descriptor's address or format read as data";
 constexpr Why kStandaloneDescriptorData = "a descriptor read only as data";
@@ -839,33 +841,40 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
 void Lower::standalone_descriptor_data(const IrInst& inst, Site site, std::uint8_t code, std::uint32_t count) {
     constexpr std::uint32_t kDwordBytes = sizeof(std::uint32_t);
     constexpr std::uint32_t kSlotDwords = kResourceDescriptorBytes / kDwordBytes;
+    constexpr std::uint32_t kSamplerSlotDwords = kSamplerDescriptorBytes / kDwordBytes;
     const auto tracked = scalar_.find(site);
     if (tracked == scalar_.end() || tracked->second.dynamic ||
         tracked->second.param >= x_->native->layout.size() || tracked->second.offset % kDwordBytes != 0)
         fail(kStandaloneDescriptorData);
     const Address& address = tracked->second;
     const RootParam& root = x_->native->layout[address.param];
+    const bool sampler = root.root.kind == RootType::Kind::SamplerHeap;
     const std::uint32_t dword = address.offset / kDwordBytes;
     const std::uint32_t first = dword % kSlotDwords;
     const std::uint32_t slot_dword = dword - first;
-    const UsedResource* used = used_kind(Source::loaded(site, 0));
-    if (used == nullptr || used->kind.kind != ResourceType::Kind::Srv ||
-        used->table_offset_dwords != slot_dword || root.root.kind != RootType::Kind::Table)
+    const UsedResource* used = sampler ? nullptr : used_kind(Source::loaded(site, 0));
+    if (!sampler && (used == nullptr || used->kind.kind != ResourceType::Kind::Srv ||
+                     used->table_offset_dwords != slot_dword || root.root.kind != RootType::Kind::Table))
         fail(kStandaloneDescriptorData);
+    const std::uint8_t resource_words = used == nullptr ? 0 : used->dwords;
     using SourceKind = UserData::Source;
     for (std::uint32_t k = 0; k < count; ++k) {
         const auto value = inst.write(Reg::s(static_cast<std::uint8_t>(code + k)));
         if (!value) continue;
         const std::uint32_t word = first + k;
         std::optional<SourceKind> source;
-        if (used->dwords == 4 && word == kBufferRecordCountWord)
+        std::uint32_t descriptor_dword = slot_dword;
+        if (sampler && (dword + k) % kSamplerSlotDwords == kSamplerLodWord) {
+            source = SourceKind::SamplerLodWord;
+            descriptor_dword = dword + k - kSamplerLodWord;
+        } else if (resource_words == 4 && word == kBufferRecordCountWord)
             source = SourceKind::ShaderBufferRecordCount;
-        else if (used->dwords == 8 && word == kImageWidthLowWord)
+        else if (resource_words == 8 && word == kImageWidthLowWord)
             source = SourceKind::ImageWidthLowBits;
-        else if (used->dwords == 8 && word == kImageDimensionsWord)
+        else if (resource_words == 8 && word == kImageDimensionsWord)
             source = SourceKind::ImageDimensions;
         if (source) {
-            descriptor_addresses_[*value] = {0, root.slot, root.root, slot_dword, *source};
+            descriptor_addresses_[*value] = {0, root.slot, root.root, descriptor_dword, *source};
         } else {
             vals_[*value] = Val::missing(kStandaloneDescriptorData);
         }

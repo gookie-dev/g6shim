@@ -319,13 +319,18 @@ const descriptor::Heap* State::heap_of(std::uint64_t handle) const {
 
 std::optional<std::uint32_t> State::descriptor_value(
     bool compute, const g6shim::shader::emit::UserData& data) const {
+    using Source = g6shim::shader::emit::UserData::Source;
+    if (data.source == Source::SamplerLodWord) {
+        const auto* heap = static_cast<const descriptor::Heap*>(heaps_[1]);
+        if (heap == nullptr) return std::nullopt;
+        return descriptor_host::sampler_lod_word(*heap, data.dword);
+    }
     const auto& all = roots(compute);
     if (data.slot >= all.size()) return std::nullopt;
     const Root& root = all[data.slot];
     if (root.kind != Root::Kind::kTable) return std::nullopt;
     const descriptor::Heap* heap = heap_of(root.value);
     if (heap == nullptr) return std::nullopt;
-    using Source = g6shim::shader::emit::UserData::Source;
     if (data.source == Source::ImageBaseAddressLow)
         return descriptor_host::table_image_base_word(*heap, root.value, data.dword);
     if (data.source == Source::ImageWidthLowBits || data.source == Source::ImageDimensions) {

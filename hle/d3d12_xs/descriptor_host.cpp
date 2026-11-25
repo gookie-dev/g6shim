@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -334,8 +335,9 @@ std::uint64_t placed_address(const descriptor::PlacedView& view) {
     return std::uint64_t{view.desc[kAddressLow]} | std::uint64_t{view.desc[kAddressHigh]} << 32;
 }
 
-std::optional<descriptor::View> table_view(const descriptor::Heap& heap, std::uint64_t table, std::uint32_t dword) {
-    if (heap.desc.kind != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || !heap.index(table))
+std::optional<descriptor::View> table_view(const descriptor::Heap& heap, std::uint64_t table, std::uint32_t dword,
+                                          std::uint32_t kind = descriptor::kViewsKind) {
+    if (heap.desc.kind != kind || !heap.index(table))
         return std::nullopt;
     const std::uint32_t step = descriptor::increment_size(nullptr, heap.desc.kind);
     const std::uint64_t offset = sizeof(std::uint32_t) * std::uint64_t{dword};
@@ -1000,6 +1002,24 @@ std::optional<std::uint32_t> table_image_sampling_fields(const descriptor::Heap&
     if (!address || *address % (1ull << kImageBaseAddressShift) != 0) return std::nullopt;
     constexpr std::uint32_t kSamplingPerformance = 4;
     return *address == 0 ? 0u : kSamplingPerformance << g6shim::shader::emit::UserData::kImageSamplingPerformanceShift;
+}
+
+std::optional<std::uint32_t> sampler_lod_word(const descriptor::Heap& heap, std::uint32_t dword) {
+    const auto view = table_view(heap, heap.start, dword, descriptor::kSamplersKind);
+    if (!view) return std::nullopt;
+    const auto* sampler = std::get_if<descriptor::SamplerView>(&*view);
+    if (sampler == nullptr) return std::nullopt;
+    D3D12_SAMPLER_DESC desc{};
+    std::memcpy(&desc, sampler->desc.data(), sizeof desc);
+    if (!std::isfinite(desc.MinLOD) || !std::isfinite(desc.MaxLOD) || desc.MinLOD > desc.MaxLOD)
+        return std::nullopt;
+    constexpr std::uint32_t kLodFieldBits = 12;
+    constexpr float kLodScale = 256.0f;
+    constexpr float kMaximumLod = static_cast<float>((1u << kLodFieldBits) - 1u) / kLodScale;
+    const auto encode = [=](float lod) {
+        return static_cast<std::uint32_t>(std::clamp(lod, 0.0f, kMaximumLod) * kLodScale);
+    };
+    return encode(desc.MinLOD) | (encode(desc.MaxLOD) << kLodFieldBits);
 }
 
 std::optional<descriptor::View> placed_texture(const descriptor::View& view) {

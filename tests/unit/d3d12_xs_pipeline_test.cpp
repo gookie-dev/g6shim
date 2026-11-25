@@ -200,6 +200,8 @@ emit::HostShader sample_shader() {
     shader.user_data.push_back(emit::UserData{24, 1, root, 16, emit::UserData::Source::ShaderBufferRecordCount});
     shader.user_data.push_back(emit::UserData{25, 1, root, 24, emit::UserData::Source::ImageWidthLowBits});
     shader.user_data.push_back(emit::UserData{26, 1, root, 24, emit::UserData::Source::ImageDimensions});
+    const g6shim::shader::RootType sampler_heap{g6shim::shader::RootType::Kind::SamplerHeap, 0};
+    shader.user_data.push_back(emit::UserData{27, 3, sampler_heap, 4, emit::UserData::Source::SamplerLodWord});
     shader.samplers.push_back({0x400, 0xC0'0000, 0x18F0'0000, 0});
     shader.static_samplers.push_back(emit::StaticSampler::from_words({0x400, 0xC0'0000, 0x18F0'0000, 0}));
     shader.root_cbvs = {2};

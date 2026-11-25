@@ -45,6 +45,7 @@ constexpr std::string_view kScalarTypedFormat = "scalar_typed_buffer_format";
 constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 constexpr std::string_view kImageSampleBiasA16 = "image_sample_bias_a16";
 constexpr std::string_view kImageShapeOnly = "image_shape_only";
+constexpr std::string_view kSamplerLodData = "sampler_lod_data";
 constexpr std::string_view kPackedInputPartner = "packed_input_partner";
 constexpr std::string_view kSelectReadLaneMask = "select_readlane_mask";
 
@@ -72,7 +73,7 @@ TEST(shader_fixtures_translate_and_validate) {
             fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords ||
             fixture.name == kImageSampleBiasA16 || fixture.name == kScalarBufferCountOnly ||
             fixture.name == kPackedInputPartner || fixture.name == kSelectReadLaneMask ||
-            fixture.name == kImageShapeOnly)
+            fixture.name == kImageShapeOnly || fixture.name == kSamplerLodData)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -241,6 +242,33 @@ TEST(shader_fixtures_translate_image_dimensions_without_an_image_operation) {
                    std::string_view::npos;
     }
     CHECK(rejected);
+}
+
+TEST(shader_fixtures_translate_sampler_lod_data) {
+    const Fixture* fixture = find_fixture(kSamplerLodData);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    constexpr std::uint8_t kSamplerUserData = 6;
+    constexpr std::uint8_t kSamplerSlot = 2;
+    try {
+        const auto lowered = lower_compute(fixture->words, kFixtureVgprs,
+            {root_param(RootType::Kind::Table, kTableUserData, kTableSlot),
+             root_param(RootType::Kind::SamplerHeap, kSamplerUserData, kSamplerSlot)},
+            {used_uav(kTableUserData, kTableSlot)}, (kSamplerUserData + 1u) << kUserSgprShift, {1, 1, 1});
+        const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(), [](const UserData& entry) {
+            return entry.source == UserData::Source::SamplerLodWord;
+        });
+        CHECK(field != lowered.user_data.end());
+        if (field != lowered.user_data.end()) {
+            CHECK(field->root.kind == RootType::Kind::SamplerHeap);
+            CHECK(field->slot == kSamplerSlot);
+            CHECK(field->dword == 4);
+        }
+        check_dxil(lowered.dxil, fixture->name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
+    }
 }
 
 TEST(shader_fixtures_translate_a_buffer_count_without_using_the_view) {
