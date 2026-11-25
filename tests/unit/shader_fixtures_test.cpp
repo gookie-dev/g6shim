@@ -45,6 +45,7 @@ constexpr std::string_view kScalarTypedFormat = "scalar_typed_buffer_format";
 constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 constexpr std::string_view kImageSampleBiasA16 = "image_sample_bias_a16";
 constexpr std::string_view kPackedInputPartner = "packed_input_partner";
+constexpr std::string_view kSelectReadLaneMask = "select_readlane_mask";
 
 const Fixture* find_fixture(std::string_view name) {
     const auto found = std::find_if(std::begin(kFixtures), std::end(kFixtures),
@@ -69,7 +70,7 @@ TEST(shader_fixtures_translate_and_validate) {
             fixture.name == kScalarRawHighWord || fixture.name == kScalarTypedFormat ||
             fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords ||
             fixture.name == kImageSampleBiasA16 || fixture.name == kScalarBufferCountOnly ||
-            fixture.name == kPackedInputPartner)
+            fixture.name == kPackedInputPartner || fixture.name == kSelectReadLaneMask)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -175,6 +176,29 @@ TEST(shader_fixtures_translate_an_implicit_packed_pixel_input_pair) {
     } catch (const std::exception& error) {
         std::printf("fixture %s did not translate a separated partner: %s\n", fixture->name, error.what());
         CHECK(false);
+    }
+}
+
+TEST(shader_fixtures_translate_a_select_on_raw_lane_bits) {
+    const Fixture* fixture = find_fixture(kSelectReadLaneMask);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    NativeProgram native;
+    native.stage = HwStage::Cs;
+    native.vgprs = kFixtureVgprs;
+    native.io = ComputeIo{kUserSgprs << kUserSgprShift, {32, 2, 1}};
+    native.layout = {root_param(RootType::Kind::Table, kTableUserData, kTableSlot)};
+    native.used = {used_uav(kTableUserData, kTableSlot)};
+    native.code = bytes_of(fixture->words);
+    for (const bool wave64 : {false, true}) {
+        native.wave64 = wave64;
+        try {
+            check_dxil(lower_native(native).dxil, fixture->name);
+        } catch (const std::exception& error) {
+            std::printf("fixture %s (wave %d) did not translate: %s\n", fixture->name, wave64 ? 64 : 32,
+                        error.what());
+            CHECK(false);
+        }
     }
 }
 

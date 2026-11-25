@@ -593,14 +593,23 @@ void Lower::valu_op(const IrInst& inst, std::optional<V> guard_value) {
         return;
     }
     if (name == "v_cndmask_b32") {
-        std::optional<Value> mask;
-        if (fields->src.size() > 2) {
-            if (const auto* scalar = std::get_if<ScalarOperand>(&fields->src[2]))
-                mask = inst.read(Reg::s(scalar->code));
-        }
+        const auto* scalar = fields->src.size() > 2 ? std::get_if<ScalarOperand>(&fields->src[2]) : nullptr;
+        const auto mask = scalar != nullptr ? inst.read(Reg::s(scalar->code)) : std::nullopt;
         const auto found = mask ? x_->st->masks.find(*mask) : x_->st->masks.end();
-        if (!mask || found == x_->st->masks.end()) fail("a select on an untracked mask");
-        const V cond = boolean(found->second, c);
+        V cond;
+        if (found != x_->st->masks.end()) {
+            cond = boolean(found->second, c);
+        } else {
+            if (!console_lanes_ || !mask) fail("a select on an untracked mask");
+            std::optional<V> high;
+            if (x_->native->wave64) {
+                const auto upper = inst.read(Reg::s(static_cast<std::uint8_t>(scalar->code + 1)));
+                if (!upper) fail("a select on an untracked mask");
+                high = i32_of(*upper);
+            }
+            cross_lane(false);
+            cond = lane_bit(c, i32_of(*mask), high);
+        }
         if (fields->abs != 0 || fields->neg != 0) {
             const V a = fsrc(inst, 0);
             const V b = fsrc(inst, 1);
