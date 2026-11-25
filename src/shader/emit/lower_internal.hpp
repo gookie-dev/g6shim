@@ -185,6 +185,7 @@ private:
     V scc_in(const IrInst& inst);
     void smem(const IrInst& inst, Site site);
     void descriptor_data(const IrInst& inst, Site site);
+    void standalone_buffer_count(const IrInst& inst, Site site, std::uint8_t code, std::uint32_t count);
     bool defer_descriptor_address(Value value, const Source& src, const UsedResource& used,
                                   UserData::Source source);
     Val descriptor_address(UserData data);

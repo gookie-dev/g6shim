@@ -153,8 +153,12 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     CHECK(!table_buffer_component_mapping(heap, table, kSlotDwords + 1));
     CHECK(!table_buffer_component_mapping(heap, table, 3 * kSlotDwords));
     using descriptor_host::table_linear_raw_buffer_high_word;
+    using descriptor_host::table_buffer_record_count;
     using descriptor_host::table_untyped_buffer_format_word;
     CHECK(!table_linear_raw_buffer_high_word(heap, table, kSlotDwords));
+    CHECK(!table_buffer_record_count(heap, table, kSlotDwords));
+    CHECK(!table_buffer_record_count(heap, table, 0));
+    CHECK(table_buffer_record_count(heap, table, 2 * kSlotDwords) == 0u);
     CHECK(table_linear_raw_buffer_high_word(heap, table, 2 * kSlotDwords) == 0u);
     CHECK(table_untyped_buffer_format_word(heap, table, 2 * kSlotDwords, true) == 0u);
     CHECK(table_untyped_buffer_format_word(heap, table, 2 * kSlotDwords, false) == 0u);
@@ -162,6 +166,7 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     std::memcpy(shader_words.data(), &srv, sizeof srv);
     descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
     CHECK(table_linear_raw_buffer_high_word(heap, table, kSlotDwords) == 2u);
+    CHECK(table_buffer_record_count(heap, table, kSlotDwords) == 32u);
     CHECK(!table_untyped_buffer_format_word(heap, table, kSlotDwords, false));
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     std::memcpy(shader_words.data(), &srv, sizeof srv);
@@ -188,6 +193,7 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     shader_words[11] = 2;
     descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
     CHECK(table_structured_buffer_high_word(heap, table, kSlotDwords) == 0x0010'0002u);
+    CHECK(table_buffer_record_count(heap, table, kSlotDwords) == 8u);
     CHECK(table_untyped_buffer_format_word(heap, table, kSlotDwords, true) == 0x1101'4facu);
     CHECK(!table_linear_raw_buffer_high_word(heap, table, kSlotDwords));
     CHECK(!table_untyped_buffer_format_word(heap, table, kSlotDwords + 1, true));
@@ -202,6 +208,8 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     std::memcpy(shader_words.data(), &srv, sizeof srv);
     descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
     CHECK(table_typed_buffer_word(heap, table, kSlotDwords, true) == 0x0004'0002u);
+    CHECK(table_buffer_record_count(heap, table, kSlotDwords) == 8u);
+    CHECK(!table_buffer_record_count(heap, table, kSlotDwords + 1));
     CHECK(table_typed_buffer_word(heap, table, kSlotDwords, false) == 0x1101'4204u);
     srv.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(3, 4, 5, 0);
     std::memcpy(shader_words.data(), &srv, sizeof srv);

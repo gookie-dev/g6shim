@@ -35,6 +35,7 @@ constexpr std::uint32_t kUserSgprs = 5;
 constexpr std::uint32_t kUserSgprShift = 1;
 constexpr std::uint32_t kSecondDescriptorDword = 8;
 constexpr std::string_view kScalarBufferLength = "scalar_buffer_length";
+constexpr std::string_view kScalarBufferCountOnly = "scalar_buffer_count_only";
 constexpr std::string_view kScalarBufferAddress = "scalar_buffer_address";
 constexpr std::string_view kScalarBufferFields = "scalar_buffer_fields";
 constexpr std::string_view kScalarConstantBufferWords = "scalar_constant_buffer_words";
@@ -66,7 +67,7 @@ TEST(shader_fixtures_translate_and_validate) {
             fixture.name == kScalarBufferFields || fixture.name == kScalarStructuredFields ||
             fixture.name == kScalarRawHighWord || fixture.name == kScalarTypedFormat ||
             fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords ||
-            fixture.name == kImageSampleBiasA16)
+            fixture.name == kImageSampleBiasA16 || fixture.name == kScalarBufferCountOnly)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -105,6 +106,31 @@ TEST(shader_fixtures_translate_biased_sample_with_packed_coordinates) {
     native.code = bytes_of(fixture->words);
     try {
         const Lowered lowered = lower_native(native);
+        check_dxil(lowered.dxil, fixture->name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
+    }
+}
+
+TEST(shader_fixtures_translate_a_buffer_count_without_using_the_view) {
+    const Fixture* fixture = find_fixture(kScalarBufferCountOnly);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    UsedResource input = used_uav(kTableUserData, kTableSlot);
+    input.kind.kind = ResourceType::Kind::Srv;
+    UsedResource output = used_uav(kTableUserData, kTableSlot);
+    output.table_offset_dwords = kSecondDescriptorDword;
+    try {
+        const Lowered lowered = lower_fixture(*fixture, {input, output});
+        const auto count = std::find_if(lowered.user_data.begin(), lowered.user_data.end(), [](const UserData& entry) {
+            return entry.source == UserData::Source::ShaderBufferRecordCount;
+        });
+        CHECK(count != lowered.user_data.end());
+        if (count != lowered.user_data.end()) {
+            CHECK(count->slot == kTableSlot);
+            CHECK(count->dword == 0);
+        }
         check_dxil(lowered.dxil, fixture->name);
     } catch (const std::exception& error) {
         std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());

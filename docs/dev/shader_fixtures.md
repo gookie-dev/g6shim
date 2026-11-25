@@ -20,6 +20,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `scalar_buffer_length.s` binds an input resource at the start of the table and an output UAV at byte offset `0x20`. It stores the input length and the result of a scalar buffer load in the UAV.
 
+`scalar_buffer_count_only.s` reads the record-count word from the input table slot and stores it in the UAV. It reads no elements through the input view.
+
 `scalar_buffer_address.s` uses the same bindings. A branch joins the low address word with a zero value before the store. The test uses both shader-resource and constant-buffer input views.
 
 `scalar_constant_buffer_words.s` stores a constant buffer's high address, record count and format words alongside the result of a scalar load through the same descriptor.

@@ -81,6 +81,8 @@ std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, 
                                                   std::uint32_t dword, bool constant_buffer);
 std::optional<std::array<std::uint32_t, 3>> table_constant_buffer_words(const descriptor::Heap& heap,
                                                                        std::uint64_t table, std::uint32_t dword);
+std::optional<std::uint32_t> table_buffer_record_count(const descriptor::Heap& heap, std::uint64_t table,
+                                                       std::uint32_t dword);
 std::optional<std::uint32_t> table_linear_raw_buffer_high_word(const descriptor::Heap& heap, std::uint64_t table,
                                                               std::uint32_t dword);
 std::optional<std::uint32_t> table_structured_buffer_high_word(const descriptor::Heap& heap, std::uint64_t table,

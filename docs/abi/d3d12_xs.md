@@ -91,6 +91,8 @@ Explicit raw and structured buffer views supply word 1 with zero swizzle bits. R
 
 Typed buffer views of the supported 32-bit scalar, two-channel 16-bit and four-channel 8-bit formats supply word 1 with a four-byte stride and no swizzle. Word 3 uses the corresponding GFX10 format and index bounds mode. A mapping that selects an absent component uses zero for color and one for alpha. The values match SDK-created views on `1002:13C0`.
 
+The host can supply word 2 from an aligned table slot even when the shader never uses the descriptor in a resource instruction. In synthetic SDK-created views, word 2 counts bytes for raw views and elements for structured and supported typed views. A null buffer view supplies zero.
+
 Image base-address words in fixed table slots use the same binding path. The source is the texture's title-facing memory address or the explicit address in a placed view. The image descriptor stores the base in units of 256 bytes.
 
 Word 5 of the eight-word image descriptor has reserved zero bits at 31:24. Checked two-dimensional shader-resource views use value 4 for the sampling performance field at bits 22:20 and zero for the LOD-warning field at bits 19:8, as observed in synthetic SDK-created views across color formats, mip clamps and resource flags. An unbound view supplies zero.

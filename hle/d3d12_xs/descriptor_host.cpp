@@ -781,6 +781,28 @@ bool linear_raw_buffer(const D3D12_SHADER_RESOURCE_VIEW_DESC& desc) {
            desc.Buffer.StructureByteStride == 0;
 }
 
+struct TypedBufferFormat {
+    DXGI_FORMAT dxgi;
+    std::uint32_t gfx10;
+    std::uint32_t components;
+};
+
+constexpr TypedBufferFormat kTypedBufferFormats[] = {
+    {DXGI_FORMAT_R32_UINT, 20, 1}, {DXGI_FORMAT_R32_SINT, 21, 1}, {DXGI_FORMAT_R32_FLOAT, 22, 1},
+    {DXGI_FORMAT_R16G16_UNORM, 23, 2}, {DXGI_FORMAT_R16G16_SNORM, 24, 2}, {DXGI_FORMAT_R16G16_UINT, 27, 2},
+    {DXGI_FORMAT_R16G16_SINT, 28, 2}, {DXGI_FORMAT_R16G16_FLOAT, 29, 2},
+    {DXGI_FORMAT_R8G8B8A8_UNORM, 56, 4}, {DXGI_FORMAT_R8G8B8A8_SNORM, 57, 4},
+    {DXGI_FORMAT_R8G8B8A8_UINT, 60, 4}, {DXGI_FORMAT_R8G8B8A8_SINT, 61, 4},
+};
+
+const TypedBufferFormat* typed_buffer_format(const D3D12_SHADER_RESOURCE_VIEW_DESC& desc) {
+    if (desc.Buffer.StructureByteStride != 0 || desc.Buffer.Flags != D3D12_BUFFER_SRV_FLAG_NONE)
+        return nullptr;
+    const auto found = std::find_if(std::begin(kTypedBufferFormats), std::end(kTypedBufferFormats),
+                                    [&](const TypedBufferFormat& format) { return format.dxgi == desc.Format; });
+    return found != std::end(kTypedBufferFormats) ? found : nullptr;
+}
+
 std::optional<std::uint32_t> buffer_component_mapping(std::uint32_t mapping, std::uint32_t components) {
     constexpr std::uint32_t kMappingMark = D3D12_SHADER_COMPONENT_MAPPING_ALWAYS_SET_BIT_AVOIDING_ZEROMEM_MISTAKES;
     if (mapping / kMappingMark != 1) return std::nullopt;
@@ -843,6 +865,26 @@ std::optional<std::uint32_t> table_structured_buffer_high_word(const descriptor:
     return (*stride << UserData::kBufferStrideShift) | high;
 }
 
+std::optional<std::uint32_t> table_buffer_record_count(const descriptor::Heap& heap, std::uint64_t table,
+                                                       std::uint32_t dword) {
+    const auto view = table_view(heap, table, dword);
+    if (!view) return std::nullopt;
+    if (null_shader_buffer(*view)) return 0;
+    const auto desc = shader_buffer_desc(*view);
+    if (!desc) return std::nullopt;
+    const auto address = shader_buffer_address(*view);
+    if (!address) return std::nullopt;
+    if (linear_raw_buffer(*desc)) {
+        if (*address % D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT != 0 ||
+            desc->Buffer.NumElements > UINT32_MAX / kRawElementBytes)
+            return std::nullopt;
+        return desc->Buffer.NumElements * kRawElementBytes;
+    }
+    if (structured_buffer_stride(*desc) || typed_buffer_format(*desc) != nullptr)
+        return desc->Buffer.NumElements;
+    return std::nullopt;
+}
+
 std::optional<std::uint32_t> table_linear_raw_buffer_high_word(const descriptor::Heap& heap, std::uint64_t table,
                                                               std::uint32_t dword) {
     const auto view = table_view(heap, table, dword);
@@ -875,25 +917,11 @@ std::optional<std::uint32_t> table_typed_buffer_word(const descriptor::Heap& hea
     if (!view) return std::nullopt;
     if (null_shader_buffer(*view)) return 0;
     const auto desc = shader_buffer_desc(*view);
-    if (!desc || desc->Buffer.StructureByteStride != 0 || desc->Buffer.Flags != D3D12_BUFFER_SRV_FLAG_NONE)
-        return std::nullopt;
+    if (!desc) return std::nullopt;
+    const auto* found = typed_buffer_format(*desc);
+    if (found == nullptr) return std::nullopt;
     const auto address = shader_buffer_address(*view);
     if (!address) return std::nullopt;
-    struct Format {
-        DXGI_FORMAT dxgi;
-        std::uint32_t gfx10;
-        std::uint32_t components;
-    };
-    constexpr Format kFormats[] = {
-        {DXGI_FORMAT_R32_UINT, 20, 1}, {DXGI_FORMAT_R32_SINT, 21, 1}, {DXGI_FORMAT_R32_FLOAT, 22, 1},
-        {DXGI_FORMAT_R16G16_UNORM, 23, 2}, {DXGI_FORMAT_R16G16_SNORM, 24, 2}, {DXGI_FORMAT_R16G16_UINT, 27, 2},
-        {DXGI_FORMAT_R16G16_SINT, 28, 2}, {DXGI_FORMAT_R16G16_FLOAT, 29, 2},
-        {DXGI_FORMAT_R8G8B8A8_UNORM, 56, 4}, {DXGI_FORMAT_R8G8B8A8_SNORM, 57, 4},
-        {DXGI_FORMAT_R8G8B8A8_UINT, 60, 4}, {DXGI_FORMAT_R8G8B8A8_SINT, 61, 4},
-    };
-    const auto found = std::find_if(std::begin(kFormats), std::end(kFormats),
-                                    [&](const Format& format) { return format.dxgi == desc->Format; });
-    if (found == std::end(kFormats)) return std::nullopt;
     if (high_address) {
         using UserData = g6shim::shader::emit::UserData;
         constexpr std::uint32_t kTypedElementBytes = 4;

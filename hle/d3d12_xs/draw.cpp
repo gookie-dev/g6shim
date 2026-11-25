@@ -340,6 +340,8 @@ std::optional<std::uint32_t> State::descriptor_value(
                           static_cast<std::uint32_t>(Source::ConstantBufferHighWord);
         return (*words)[word];
     }
+    if (data.source == Source::ShaderBufferRecordCount)
+        return descriptor_host::table_buffer_record_count(*heap, root.value, data.dword);
     if (data.source == Source::ShaderBufferComponentMapping)
         return descriptor_host::table_buffer_component_mapping(*heap, root.value, data.dword);
     if (data.source == Source::StructuredBufferHighWord)

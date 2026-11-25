@@ -20,8 +20,10 @@ namespace {
 constexpr std::uint64_t kCodeCbvSize = 0x1'0000;
 constexpr std::pair<std::uint32_t, std::uint32_t> kRawBufferSrv{11, 0};
 constexpr std::uint32_t kResourceDescriptorBytes = 32;
+constexpr std::uint32_t kBufferRecordCountWord = 2;
 constexpr std::uint32_t kImageWord5ReservedMask = 0xff00'0000;
 constexpr Why kDescriptorData = "a descriptor's address or format read as data";
+constexpr Why kStandaloneDescriptorData = "a descriptor read only as data";
 
 std::optional<std::uint32_t> operand_constant(const Operand& value) {
     if (const auto* literal = std::get_if<LiteralOperand>(&value)) return literal->value;
@@ -652,7 +654,10 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
         }
         if (use_at) break;
     }
-    if (!use_at) fail("a descriptor read only as data");
+    if (!use_at) {
+        standalone_buffer_count(inst, site, code, count);
+        return;
+    }
     const Site at = use_at->first;
     const std::uint8_t first = use_at->second;
     const Source src = Source::loaded(site, first);
@@ -818,6 +823,35 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
                     *v, src, *used, rel == 1 ? SourceKind::TypedBufferHighWord : SourceKind::TypedBufferFormatWord))
                 continue;
             vals_[*v] = Val::missing(kDescriptorData);
+        }
+    }
+}
+
+void Lower::standalone_buffer_count(const IrInst& inst, Site site, std::uint8_t code, std::uint32_t count) {
+    constexpr std::uint32_t kDwordBytes = sizeof(std::uint32_t);
+    constexpr std::uint32_t kSlotDwords = kResourceDescriptorBytes / kDwordBytes;
+    const auto tracked = scalar_.find(site);
+    if (tracked == scalar_.end() || tracked->second.dynamic ||
+        tracked->second.param >= x_->native->layout.size() || tracked->second.offset % kDwordBytes != 0)
+        fail(kStandaloneDescriptorData);
+    const Address& address = tracked->second;
+    const RootParam& root = x_->native->layout[address.param];
+    const std::uint32_t dword = address.offset / kDwordBytes;
+    const std::uint32_t first = dword % kSlotDwords;
+    const std::uint32_t slot_dword = dword - first;
+    const UsedResource* used = used_kind(Source::loaded(site, 0));
+    if (used == nullptr || used->kind.kind != ResourceType::Kind::Srv || used->dwords != 4 ||
+        used->table_offset_dwords != slot_dword || root.root.kind != RootType::Kind::Table ||
+        first > kBufferRecordCountWord || kBufferRecordCountWord - first >= count)
+        fail(kStandaloneDescriptorData);
+    for (std::uint32_t k = 0; k < count; ++k) {
+        const auto value = inst.write(Reg::s(static_cast<std::uint8_t>(code + k)));
+        if (!value) continue;
+        if (first + k == kBufferRecordCountWord) {
+            descriptor_addresses_[*value] = {0, root.slot, root.root, slot_dword,
+                                             UserData::Source::ShaderBufferRecordCount};
+        } else {
+            vals_[*value] = Val::missing(kStandaloneDescriptorData);
         }
     }
 }
