@@ -187,6 +187,7 @@ emit::HostShader sample_shader() {
     shader.user_data.push_back(emit::UserData{11, 1, root, 24, emit::UserData::Source::ImageBaseAddressLow});
     shader.user_data.push_back(emit::UserData{12, 1, root, 16, emit::UserData::Source::ShaderBufferAddressHigh});
     shader.user_data.push_back(emit::UserData{13, 1, root, 16, emit::UserData::Source::ShaderBufferComponentMapping});
+    shader.user_data.push_back(emit::UserData{14, 1, root, 16, emit::UserData::Source::StructuredBufferHighWord});
     shader.samplers.push_back({0x400, 0xC0'0000, 0x18F0'0000, 0});
     shader.static_samplers.push_back(emit::StaticSampler::from_words({0x400, 0xC0'0000, 0x18F0'0000, 0}));
     shader.root_cbvs = {2};

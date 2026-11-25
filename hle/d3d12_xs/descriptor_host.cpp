@@ -7,6 +7,7 @@
 #include "texture.hpp"
 
 #include <g6shim/log.hpp>
+#include <g6shim/shader/emit/emit.hpp>
 
 #include <algorithm>
 #include <array>
@@ -711,16 +712,10 @@ std::optional<std::pair<std::uint64_t, std::uint64_t>> buffer_range(const descri
     return std::nullopt;
 }
 
-std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, std::uint64_t table,
-                                                  std::uint32_t dword, bool constant_buffer) {
-    const auto view = table_view(heap, table, dword);
-    if (!view) return std::nullopt;
-    if (constant_buffer) {
-        const auto* buffer = std::get_if<descriptor::ConstantView>(&*view);
-        if (buffer != nullptr) return buffer->address;
-        return std::nullopt;
-    }
-    if (const auto* srv = std::get_if<descriptor::ShaderView>(&*view)) {
+namespace {
+
+std::optional<std::uint64_t> shader_buffer_address(const descriptor::View& view) {
+    if (const auto* srv = std::get_if<descriptor::ShaderView>(&view)) {
         if (srv->resource == 0) {
             if (!srv->desc || srv_desc(*srv->desc).ViewDimension == D3D12_SRV_DIMENSION_BUFFER) return 0;
             return std::nullopt;
@@ -731,39 +726,78 @@ std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, 
             return reinterpret_cast<std::uint64_t>(bytes->first);
         }
     } else {
-        const auto* placed = std::get_if<descriptor::PlacedView>(&*view);
+        const auto* placed = std::get_if<descriptor::PlacedView>(&view);
         if (placed == nullptr || placed->unordered) return std::nullopt;
     }
-    const auto range = buffer_range(*view);
+    const auto range = buffer_range(view);
     if (!range) return std::nullopt;
     return range->first;
+}
+
+std::optional<D3D12_SHADER_RESOURCE_VIEW_DESC> shader_buffer_desc(const descriptor::View& view) {
+    D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
+    if (const auto* srv = std::get_if<descriptor::ShaderView>(&view)) {
+        if (!srv->desc) return std::nullopt;
+        desc = srv_desc(*srv->desc);
+    } else {
+        const auto* placed = std::get_if<descriptor::PlacedView>(&view);
+        if (placed == nullptr || placed->unordered || placed->resource[0] != kBufferDimension) return std::nullopt;
+        std::array<std::uint32_t, 10> words{};
+        std::copy_n(placed->desc.begin(), words.size(), words.begin());
+        desc = srv_desc(words);
+    }
+    if (desc.ViewDimension != D3D12_SRV_DIMENSION_BUFFER) return std::nullopt;
+    return desc;
+}
+
+bool null_shader_buffer(const descriptor::View& view) {
+    const auto* srv = std::get_if<descriptor::ShaderView>(&view);
+    return srv != nullptr && srv->resource == 0 && (!srv->desc || shader_buffer_desc(view));
+}
+
+}  // namespace
+
+std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, std::uint64_t table,
+                                                  std::uint32_t dword, bool constant_buffer) {
+    const auto view = table_view(heap, table, dword);
+    if (!view) return std::nullopt;
+    if (!constant_buffer) return shader_buffer_address(*view);
+    const auto* buffer = std::get_if<descriptor::ConstantView>(&*view);
+    if (buffer == nullptr) return std::nullopt;
+    return buffer->address;
+}
+
+std::optional<std::uint32_t> table_structured_buffer_high_word(const descriptor::Heap& heap, std::uint64_t table,
+                                                              std::uint32_t dword) {
+    const auto view = table_view(heap, table, dword);
+    if (!view) return std::nullopt;
+    if (null_shader_buffer(*view)) return 0;
+    const auto desc = shader_buffer_desc(*view);
+    if (!desc || desc->Format != DXGI_FORMAT_UNKNOWN || desc->Buffer.Flags != D3D12_BUFFER_SRV_FLAG_NONE)
+        return std::nullopt;
+    using UserData = g6shim::shader::emit::UserData;
+    const std::uint32_t stride = desc->Buffer.StructureByteStride;
+    if (stride < 4 || stride % 4 != 0 || stride > UserData::kBufferStrideMask) return std::nullopt;
+    const auto address = shader_buffer_address(*view);
+    if (!address) return std::nullopt;
+    const std::uint32_t high = static_cast<std::uint32_t>(*address >> 32) & UserData::kBufferAddressHighMask;
+    return (stride << UserData::kBufferStrideShift) | high;
 }
 
 std::optional<std::uint32_t> table_buffer_component_mapping(const descriptor::Heap& heap, std::uint64_t table,
                                                             std::uint32_t dword) {
     const auto view = table_view(heap, table, dword);
     if (!view) return std::nullopt;
-    D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
-    if (const auto* srv = std::get_if<descriptor::ShaderView>(&*view)) {
-        if (!srv->desc) return srv->resource == 0 ? std::optional<std::uint32_t>{0} : std::nullopt;
-        desc = srv_desc(*srv->desc);
-        if (desc.ViewDimension != D3D12_SRV_DIMENSION_BUFFER) return std::nullopt;
-        if (srv->resource == 0) return 0;
-    } else {
-        const auto* placed = std::get_if<descriptor::PlacedView>(&*view);
-        if (placed == nullptr || placed->unordered || placed->resource[0] != kBufferDimension) return std::nullopt;
-        std::array<std::uint32_t, 10> words{};
-        std::copy_n(placed->desc.begin(), words.size(), words.begin());
-        desc = srv_desc(words);
-        if (desc.ViewDimension != D3D12_SRV_DIMENSION_BUFFER) return std::nullopt;
-    }
+    if (null_shader_buffer(*view)) return 0;
+    const auto desc = shader_buffer_desc(*view);
+    if (!desc) return std::nullopt;
     constexpr std::uint32_t kMappingMark = D3D12_SHADER_COMPONENT_MAPPING_ALWAYS_SET_BIT_AVOIDING_ZEROMEM_MISTAKES;
-    if (desc.Shader4ComponentMapping / kMappingMark != 1) return std::nullopt;
+    if (desc->Shader4ComponentMapping / kMappingMark != 1) return std::nullopt;
     constexpr std::array<std::uint32_t, 6> kGfx10Selectors{4, 5, 6, 7, 0, 1};
     constexpr std::uint32_t kSelectorBits = 3;
     std::uint32_t word = 0;
     for (std::uint32_t i = 0; i < 4; ++i) {
-        const auto source = D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(i, desc.Shader4ComponentMapping);
+        const auto source = D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(i, desc->Shader4ComponentMapping);
         const auto index = static_cast<std::size_t>(source);
         if (index >= kGfx10Selectors.size()) return std::nullopt;
         word |= kGfx10Selectors[index] << (i * kSelectorBits);

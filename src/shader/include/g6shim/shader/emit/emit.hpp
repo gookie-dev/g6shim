@@ -23,7 +23,7 @@ namespace g6shim::shader::emit {
 struct UserData {
     enum class Source : std::uint32_t {
         Root, ConstantBufferAddressLow, ShaderBufferAddressLow, ImageBaseAddressLow,
-        ShaderBufferAddressHigh, ShaderBufferComponentMapping
+        ShaderBufferAddressHigh, ShaderBufferComponentMapping, StructuredBufferHighWord
     };
 
     std::uint32_t index = 0;
@@ -34,10 +34,15 @@ struct UserData {
 
     static constexpr std::uint32_t kBufferAddressHighMask = 0xffff;
     static constexpr std::uint32_t kBufferComponentMappingMask = 0xfff;
+    static constexpr std::uint32_t kBufferStrideShift = 16;
+    static constexpr std::uint32_t kBufferStrideMask = 0x3fff;
+    static constexpr std::uint32_t kStructuredBufferHighMask =
+        (kBufferStrideMask << kBufferStrideShift) | kBufferAddressHighMask;
 
     constexpr std::uint32_t known_bits() const {
         if (source == Source::ShaderBufferAddressHigh) return kBufferAddressHighMask;
         if (source == Source::ShaderBufferComponentMapping) return kBufferComponentMappingMask;
+        if (source == Source::StructuredBufferHighWord) return kStructuredBufferHighMask;
         return UINT32_MAX;
     }
 

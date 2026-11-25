@@ -24,6 +24,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `scalar_buffer_fields.s` joins two descriptor words with zero and masks out their address or component selector bits. The test also requests a bit outside the known address and checks the translation error.
 
+`scalar_structured_fields.s` masks and extracts stride bits from a structured descriptor word and separately compares it with zero. Its negative case requests a cache flag.
+
 `scalar_image_address.s` uses the first slot for an image descriptor. It stores the shifted base-address word and the result of an image load in the output UAV.
 
 ## Adding a program

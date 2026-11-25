@@ -2022,7 +2022,10 @@ V Lower::masked_descriptor_value(Value value, std::uint32_t mask) {
     const auto field = descriptor_addresses_.find(value);
     if (field != descriptor_addresses_.end()) {
         if ((mask & ~field->second.known_bits()) != 0) fail(unknown_bits);
-        return descriptor_address(field->second).value;
+        UserData data = field->second;
+        if (data.source == UserData::Source::StructuredBufferHighWord && (mask & ~UserData::kBufferAddressHighMask) == 0)
+            data.source = UserData::Source::ShaderBufferAddressHigh;
+        return descriptor_address(data).value;
     }
     const auto at = phi_at_.find(value);
     if (at != phi_at_.end() && !is_mask(value) && !x_->st->highs.contains(value)) {

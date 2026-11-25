@@ -83,6 +83,8 @@ When a shader reads the low address word of a scalar buffer descriptor at a fixe
 
 Masked scalar reads can use buffer descriptor word 1 bits 15:0 for the upper address bits and word 3 bits 11:0 for the four component selectors. The draw derives the selectors from the view's component mapping. An unbound buffer supplies zero for both fields.
 
+For a structured buffer, word 1 bits 29:16 come from the view's nonzero byte stride. A comparison of that word against zero uses the packed address and stride. A bound structured view always has a nonzero stride and an unbound descriptor is all zero.
+
 Image base-address words in fixed table slots use the same binding path. The source is the texture's title-facing memory address or the explicit address in a placed view. The image descriptor stores the base in units of 256 bytes.
 
 ## Device slots

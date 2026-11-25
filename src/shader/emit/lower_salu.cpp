@@ -27,6 +27,16 @@ std::optional<std::uint32_t> operand_constant(const Operand& value) {
     return std::nullopt;
 }
 
+std::uint32_t extract_mask(std::uint32_t control, bool is_signed) {
+    constexpr std::uint32_t kWordBits = 32;
+    const std::uint32_t offset = control & (kWordBits - 1);
+    const std::uint32_t width = (control >> 16) & 0x7f;
+    const std::uint32_t count = std::min(width, kWordBits - offset);
+    const std::uint32_t bits = count == kWordBits ? UINT32_MAX : (1u << count) - 1;
+    const std::uint32_t sign = is_signed && width > count ? 1u << (kWordBits - 1) : 0;
+    return (bits << offset) | sign;
+}
+
 bool strip(std::string_view text, std::string_view prefix, std::string_view* rest) {
     if (!text.starts_with(prefix)) return false;
     *rest = text.substr(prefix.size());
@@ -85,6 +95,13 @@ void Lower::sop(const IrInst& inst) {
         }
         if (k >= src.size()) fail("a missing operand");
         return operand(inst, src[k]);
+    };
+    const auto masked_src32 = [&](std::size_t index, std::optional<std::uint32_t> mask) -> V {
+        if (mask && index < src.size()) {
+            const auto value = scalar_value(src[index]);
+            if (value && has_partial_descriptor(*value)) return masked_descriptor_value(*value, *mask);
+        }
+        return src32(index);
     };
     const auto sext16 = [&]() -> V {
         const std::uint16_t value = imm.value_or(0);
@@ -169,8 +186,14 @@ void Lower::sop(const IrInst& inst) {
             a = src32(0);
         } else {
             if (cmp_op.ends_with("64")) fail("a 64-bit scalar compare");
-            a = src32(0);
-            b = src32(1);
+            const bool zero_test = cmp_op == "eq_u32" || cmp_op == "lg_u32";
+            const auto compared_mask = [&](std::size_t index) -> std::optional<std::uint32_t> {
+                if (zero_test && src.size() == 2 && operand_constant(src[1 - index]) == 0u)
+                    return UserData::kStructuredBufferHighMask;
+                return std::nullopt;
+            };
+            a = masked_src32(0, compared_mask(0));
+            b = masked_src32(1, compared_mask(1));
         }
         const bool is_signed = cmp_op.ends_with("_i32");
         const std::string_view kind = cmp_op.substr(0, std::min<std::size_t>(2, cmp_op.size()));
@@ -362,26 +385,22 @@ void Lower::sop(const IrInst& inst) {
         const std::uint32_t op = name == "s_ff1_i32_b32" ? 32 : 31;
         r = s_.op(c, "unaryBits.i32", Attr::ReadNone, s_.t.i32, op, {a});
     } else if (name == "s_bfe_u32" || name == "s_bfe_i32") {
-        const V a = src32(0);
+        const bool is_signed = name == "s_bfe_i32";
+        const auto control = src.size() == 2 ? operand_constant(src[1]) : std::nullopt;
+        const auto mask = control ? std::optional{extract_mask(*control, is_signed)} : std::nullopt;
+        const V a = masked_src32(0, mask);
         const V b = src32(1);
         const V k16 = s_.m.i32(16);
         const V k127 = s_.m.i32(0x7F);
         V w = s_.m.bin(c, Bin::LShr, b, k16);
         w = s_.m.bin(c, Bin::And, w, k127);
-        r = bfe(a, b, w, name == "s_bfe_i32");
+        r = bfe(a, b, w, is_signed);
     } else if (name == "s_and_b32" || name == "s_or_b32" || name == "s_xor_b32" ||
                name == "s_andn2_b32" || name == "s_orn2_b32" || name == "s_nand_b32" ||
                name == "s_nor_b32" || name == "s_xnor_b32") {
-        const auto masked_operand = [&](std::size_t index) -> V {
-            if (name == "s_and_b32" && src.size() == 2) {
-                const auto mask = operand_constant(src[1 - index]);
-                const auto value = scalar_value(src[index]);
-                if (mask && value && has_partial_descriptor(*value)) return masked_descriptor_value(*value, *mask);
-            }
-            return src32(index);
-        };
-        const V a = masked_operand(0);
-        V b = masked_operand(1);
+        const bool and_mask = name == "s_and_b32" && src.size() == 2;
+        const V a = masked_src32(0, and_mask ? operand_constant(src[1]) : std::nullopt);
+        V b = masked_src32(1, and_mask ? operand_constant(src[0]) : std::nullopt);
         const V ones = s_.m.i32(UINT32_MAX);
         if (name.find("n2") != std::string_view::npos) b = s_.m.bin(c, Bin::Xor, b, ones);
         const std::string_view op = name.substr(2, 3);
@@ -740,8 +759,12 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
             if (rel == 0 && image && used != nullptr &&
                 defer_descriptor_address(*v, src, *used, UserData::Source::ImageBaseAddressLow))
                 continue;
-            if (scalar_srv && rel == 1)
-                defer_descriptor_address(*v, src, *used, UserData::Source::ShaderBufferAddressHigh);
+            if (scalar_srv && rel == 1) {
+                const std::uint32_t stride = used->stride;
+                const bool structured = stride >= 4 && stride % 4 == 0 && stride <= UserData::kBufferStrideMask;
+                defer_descriptor_address(*v, src, *used, structured ? UserData::Source::StructuredBufferHighWord
+                                                                  : UserData::Source::ShaderBufferAddressHigh);
+            }
             if (scalar_srv && rel == 3)
                 defer_descriptor_address(*v, src, *used, UserData::Source::ShaderBufferComponentMapping);
             vals_[*v] = Val::missing(kDescriptorData);

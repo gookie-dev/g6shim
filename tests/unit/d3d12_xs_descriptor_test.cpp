@@ -149,6 +149,19 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     std::memcpy(shader_words.data(), &srv, sizeof srv);
     descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
     CHECK(!table_buffer_component_mapping(heap, table, kSlotDwords));
+    using descriptor_host::table_structured_buffer_high_word;
+    CHECK(!table_structured_buffer_high_word(heap, table, kSlotDwords));
+    CHECK(table_structured_buffer_high_word(heap, table, 2 * kSlotDwords) == 0u);
+    srv.Format = DXGI_FORMAT_UNKNOWN;
+    srv.Buffer.StructureByteStride = 16;
+    srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+    std::memcpy(shader_words.data(), &srv, sizeof srv);
+    shader_words[10] = 0x3344'0000;
+    shader_words[11] = 2;
+    descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
+    CHECK(table_structured_buffer_high_word(heap, table, kSlotDwords) == 0x0010'0002u);
+    CHECK(!table_structured_buffer_high_word(heap, table, kSlotDwords + 1));
+    CHECK(!table_structured_buffer_high_word(heap, table, 3 * kSlotDwords));
     release(object);
 }
 
