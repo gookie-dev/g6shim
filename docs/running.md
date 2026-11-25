@@ -74,6 +74,8 @@ The two library-loader forwarders make `LoadLibraryExW`/`LoadLibraryW` of `xgame
 | `graphics` | `d3d_dred` | `G6SHIM_D3D_DRED` | off | Record GPU progress and page faults, so the log says where the GPU stopped when the device is removed. The reason for a removal is logged without it. |
 | `graphics` | `d3d_warp` | `G6SHIM_D3D_WARP` | the default adapter | Create the host device on the software adapter. |
 | `graphics` | `cache_dir` | `G6SHIM_CACHE_DIR` | `%LOCALAPPDATA%\g6shim\cache\<title ID or exe name>` | Folder for translated shaders and compiled host pipelines. |
+| `audio` | `capture` | `G6SHIM_AUDIO_CAPTURE` | off | Record what the title plays through WASAPI as a 48 kHz stereo 16-bit WAV, with silence where nothing played. The recorder runs in a helper process and stops with the title; it starts when `AcpHal.dll` is first used. The helper is given the resolved path. |
+| `audio` | `xma_dump` | `G6SHIM_XMA_DUMP` | off | Write each XMA voice's output ring from enable to disable as `voice_<index>_<sequence>.wav` at the voice's rate and channel count, and one line per voice in `voices.txt` ([abi/acphal.md](abi/acphal.md)). |
 | `input` | `autopress` | `G6SHIM_INPUT_AUTOPRESS` | none | Hold buttons for 0.2 s at those seconds after the first controller read, for example `6:Menu,9:A`. Buttons: `Menu View A B X Y Up Down Left Right`. |
 | `storage` | `bcpack_tables` | `G6SHIM_BCPACK_TABLES` | `bcpack-tables.bin` next to `XCRDAPI.dll` | BCPack constant tables for DirectStorage texture decompression. Without a table file BCPack requests fail; zlib and plain requests still run. |
 | — | — | `G6SHIM_DXIL` | the newest `Windows Kits\10\bin\<version>\x64\dxil.dll` | Environment only, not read from `g6shim.ini`. `dxil.dll` the shader translator and its tests validate and sign DXIL with. Without one the validator tests are skipped; when the variable is set and the file cannot be loaded, they fail. CI sets it to the Windows SDK's copy. |
@@ -87,8 +89,8 @@ fullscreen = 1
 capture_frames = 300,600
 d3d_debug = 1
 
-[console]
-model = series-s
+[audio]
+capture = D:\capture.wav
 ```
 
 ## Caches

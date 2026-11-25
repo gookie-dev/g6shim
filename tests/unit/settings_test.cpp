@@ -121,12 +121,12 @@ TEST(settings_reader_prefers_environment_over_installed_file) {
 
 TEST(settings_wide_value_comes_from_file_or_environment) {
     FileReload reload;
-    WideEnv cache(L"G6SHIM_CACHE_DIR");
-    const char file[] = "[graphics]\ncache_dir = C:/caf\xc3\xa9\n";
+    WideEnv dump(L"G6SHIM_XMA_DUMP");
+    const char file[] = "[audio]\nxma_dump = C:/caf\xc3\xa9\n";
     install_bytes_for_test(reinterpret_cast<const std::uint8_t*>(file), sizeof file - 1);
-    CHECK(g6shim::settings::get_wide("G6SHIM_CACHE_DIR") == std::optional<std::wstring>(L"C:/caf\u00e9"));
-    SetEnvironmentVariableW(L"G6SHIM_CACHE_DIR", L"D:\\\u00e9");
-    CHECK(g6shim::settings::get_wide("G6SHIM_CACHE_DIR") == std::optional<std::wstring>(L"D:\\\u00e9"));
+    CHECK(g6shim::settings::get_wide("G6SHIM_XMA_DUMP") == std::optional<std::wstring>(L"C:/caf\u00e9"));
+    SetEnvironmentVariableW(L"G6SHIM_XMA_DUMP", L"D:\\\u00e9");
+    CHECK(g6shim::settings::get_wide("G6SHIM_XMA_DUMP") == std::optional<std::wstring>(L"D:\\\u00e9"));
 }
 
 TEST(settings_ini_accepts_known_keys_and_warns_on_unknown) {

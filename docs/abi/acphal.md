@@ -123,3 +123,30 @@ Kind 4 contexts are 64 bytes: 16 `UINT32` words each, written by the title and b
 Command 18 moves the read block by its word 1 count, reduced modulo the ring size, so any count wraps.
 
 Each output block is 256 bytes of interleaved 16-bit samples, so 128 samples per channel. Titles read back the write block, the writable bit and the read block, and consume whatever lies between the read and write blocks.
+
+## Diagnostics
+
+| Variable | Output |
+|---|---|
+| `G6SHIM_AUDIO_CAPTURE=<file.wav>` | The whole process tree's WASAPI render streams, recorded by a helper process through process loopback until the title exits |
+| `G6SHIM_XMA_DUMP=<folder>` | `voice_<index>_<sequence>.wav`, one file per enabled voice cycle, and `voices.txt` |
+
+The capture WAV has a canonical 44-byte header: format 1, 2 channels, 48000 Hz, 16 bits, block alignment 4. Packet time stamps place each packet; a gap longer than 96 sample frames (2 ms) becomes silence, so the file keeps real time. Header sizes are valid at all times.
+
+A voice WAV has the same header with the context's channel count (word 1 bit 29) and sample rate (word 1 bits 27-28), and holds exactly the samples written into the voice's output ring from enable to disable, in block order, including the zero padding written when the decoder had no samples. Its header is rewritten every 64 blocks, so a voice that is never disabled still leaves a usable file. Sequence numbers count the voice's dumps in the process, starting at 0.
+
+| `voices.txt` field | Content |
+|---|---|
+| `index` | XMA context index |
+| `rate`, `channels` | Context sample rate in Hz and channel count |
+| `produced` | Sample frames per channel written to the ring |
+| `consumed` | Advance-read blocks times 128, divided by the channel count |
+| `advance_reads`, `advance_blocks` | Number of advance-read commands and the total blocks they moved |
+| `buffer_switches` | Times the write block wrapped from the last ring block to 0 |
+| `input_switches` | Times decoding moved from input buffer 0 to 1 or back |
+| `underrun_reads`, `underrun_blocks` | Advance-read calls that took more blocks than the ring held, and the extra blocks |
+| `frames` | Frames read from the input |
+| `invalid_input` | Reads where the input packets lay outside one APU block |
+| `unreadable` | Reads with no frame at the read bit position |
+| `rejected` | Frames the decoder rejected |
+| `first_failure`, `first_failure_bit` | The first failure's kind and bit position; `none` when no read failed |

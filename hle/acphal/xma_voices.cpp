@@ -3,14 +3,17 @@
 #include "xma_voices.hpp"
 
 #include "apu_memory.hpp"
+#include "audio_dump.hpp"
 #include "xma.hpp"
 
 #include <g6shim/log.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -43,6 +46,14 @@ struct Trace {
     std::uint32_t partial_takes = 0;
     std::uint32_t frames = 0;
     std::uint32_t bad_frames = 0;
+    std::uint32_t invalid_input = 0;
+    std::uint32_t unreadable = 0;
+    std::uint32_t buffer_switches = 0;
+    std::uint32_t input_switches = 0;
+    std::uint32_t underrun_reads = 0;
+    std::uint64_t underrun_blocks = 0;
+    const char* first_failure = "none";
+    std::optional<std::uint64_t> first_failure_bit;
     std::int16_t peak = 0;
     std::optional<std::uint64_t> ended_ms;
 };
@@ -53,6 +64,7 @@ struct Voice {
     std::size_t skip = 0;
     bool ended = false;
     Trace trace;
+    std::optional<VoiceDump> dump;
 };
 
 struct VoiceSlot {
@@ -124,6 +136,19 @@ std::int16_t magnitude(std::int16_t sample) {
     return sample < 0 ? static_cast<std::int16_t>(-sample) : sample;
 }
 
+void note_failure(Trace& trace, const char* reason, std::size_t bit) {
+    if (trace.first_failure_bit) return;
+    trace.first_failure = reason;
+    trace.first_failure_bit = bit;
+}
+
+std::uint32_t next_dump_sequence(std::uint32_t index) {
+    static std::mutex mutex;
+    static std::map<std::uint32_t, std::uint32_t> counters;
+    std::lock_guard<std::mutex> lock(mutex);
+    return counters[index]++;
+}
+
 bool decode(Context context, Voice& voice) {
     if (voice.ended) return false;
     const std::size_t channels = context.channels();
@@ -146,12 +171,15 @@ bool decode(Context context, Voice& voice) {
         current = 1 - current;
         context.set_field(4, 31, 1, current);
         context.set_field(2, 0, 26, 0);
+        ++voice.trace.input_switches;
     }
     const std::uint32_t address = current == 0 ? context.get(5) : context.get(6);
     const std::uint32_t packets = current == 0 ? context.field(0, 0, 12) : context.field(1, 0, 12);
     const std::size_t input_bytes = static_cast<std::size_t>(packets) * xma::kPacketBytes;
     const std::span<const std::uint8_t> data = apu_bytes(address & ~(kInputPacketAlignment - 1), input_bytes);
     if (data.size() != input_bytes) {
+        ++voice.trace.invalid_input;
+        note_failure(voice.trace, "input-outside-apu", context.field(2, 0, 26));
         context.set_field(0, 20 + current, 1, 0);
         return true;
     }
@@ -162,6 +190,8 @@ bool decode(Context context, Voice& voice) {
     }
     const auto frame = xma::read_frame(data, at);
     if (!frame) {
+        ++voice.trace.unreadable;
+        note_failure(voice.trace, "no-frame-at-read-bit", at);
         context.set_field(0, 20 + current, 1, 0);
         return true;
     }
@@ -174,6 +204,7 @@ bool decode(Context context, Voice& voice) {
     ++voice.trace.frames;
     if (!voice.decoder->decode(frame->data, frame->bits, pcm)) {
         ++voice.trace.bad_frames;
+        note_failure(voice.trace, "decoder-rejected", at);
         if (voice.trace.bad_frames <= 2)
             G6SHIM_TRACE("XMA frame did not decode: bit %zu, length %zu", at, frame->bits);
     }
@@ -209,19 +240,47 @@ void pump_voice(Context context, Voice& voice) {
         auto* out = static_cast<std::uint8_t*>(
             apu_memory().virtual_address(address, static_cast<std::uint32_t>(kBlockBytes)));
         if (!out) return;
+        std::array<std::int16_t, kSamplesPerBlock> block{};
         for (std::size_t i = 0; i < kSamplesPerBlock; ++i) {
             const std::int16_t sample = voice.pcm.empty() ? 0 : voice.pcm.front();
             if (!voice.pcm.empty()) voice.pcm.pop_front();
             voice.trace.peak = std::max(voice.trace.peak, magnitude(sample));
+            block[i] = sample;
             const auto value = static_cast<std::uint16_t>(sample);
             out[2 * i] = static_cast<std::uint8_t>(value & 0xff);
             out[2 * i + 1] = static_cast<std::uint8_t>(value >> 8);
         }
+        if (voice.dump) voice.dump->append(block.data(), block.size());
         voice.trace.produced += kSamplesPerBlock / context.channels();
         const std::uint32_t next_write = (write + 1) % size;
         context.set_field(0, 27, 5, next_write);
+        if (next_write == 0) ++voice.trace.buffer_switches;
         if (next_write == context.field(9, 0, 5)) context.set_field(1, 31, 1, 0);
     }
+}
+
+void finish_dump(std::uint32_t index, const Context& context, Voice& voice) {
+    if (!voice.dump) return;
+    voice.dump->close();
+    VoiceReport report;
+    report.index = index;
+    report.rate = kFrameRates[context.field(1, 27, 2)];
+    report.channels = static_cast<std::uint16_t>(context.channels());
+    report.produced = voice.trace.produced;
+    report.consumed = voice.trace.taken * kSamplesPerBlock / report.channels;
+    report.advance_reads = voice.trace.takes;
+    report.advance_blocks = voice.trace.taken;
+    report.buffer_switches = voice.trace.buffer_switches;
+    report.input_switches = voice.trace.input_switches;
+    report.underrun_reads = voice.trace.underrun_reads;
+    report.underrun_blocks = voice.trace.underrun_blocks;
+    report.frames = voice.trace.frames;
+    report.invalid_input = voice.trace.invalid_input;
+    report.unreadable = voice.trace.unreadable;
+    report.rejected = voice.trace.bad_frames;
+    report.first_failure = voice.trace.first_failure;
+    report.first_failure_bit = voice.trace.first_failure_bit;
+    append_voice_report(voice.dump->directory(), report);
 }
 
 void decoder_loop() {
@@ -266,6 +325,13 @@ void set_xma_context_array(std::uint8_t* array, std::uint32_t voices) {
 void clear_xma_context_array() {
     std::unique_lock<std::shared_mutex> lock(state_mutex());
     State& current = state();
+    for (std::uint32_t index = 0; index < current.voices.size(); ++index) {
+        const auto context = context_at(current, index);
+        if (!context) continue;
+        VoiceSlot& slot = *current.voices[index];
+        std::lock_guard<std::mutex> voice_lock(slot.mutex);
+        if (slot.voice) finish_dump(index, *context, *slot.voice);
+    }
     current.array = nullptr;
     current.voices.clear();
 }
@@ -288,6 +354,12 @@ void xma_enable(std::uint32_t index) {
         slot.voice = std::make_unique<Voice>();
         slot.voice->skip = static_cast<std::size_t>(context->field(1, 24, 3)) * xma::kSubframeSamples;
         slot.voice->trace.since = Clock::now();
+        if (const auto directory = voice_dump_directory()) {
+            const std::uint32_t rate = kFrameRates[context->field(1, 27, 2)];
+            const auto channels = static_cast<std::uint16_t>(context->channels());
+            slot.voice->dump = VoiceDump::create(*directory, index, next_dump_sequence(index), rate, channels);
+            if (!slot.voice->dump) G6SHIM_WARN("XMA dump: cannot write voice %lu", index);
+        }
         enabled = true;
     }
     if (enabled) wake_decoder();
@@ -307,6 +379,7 @@ void xma_disable(std::uint32_t index) {
                  static_cast<long long>(elapsed), voice->trace.produced,
                  voice->trace.taken * kSamplesPerBlock / context->channels(), voice->trace.frames,
                  voice->trace.bad_frames);
+    if (voice->dump) finish_dump(index, *context, *voice);
 }
 
 void xma_advance_read(std::uint32_t index, std::uint32_t blocks) {
@@ -318,13 +391,22 @@ void xma_advance_read(std::uint32_t index, std::uint32_t blocks) {
         VoiceSlot& slot = *state().voices[index];
         std::lock_guard<std::mutex> voice_lock(slot.mutex);
         const std::uint32_t size = std::max(context->field(0, 22, 5), 1u);
-        const std::uint32_t read = (context->field(9, 0, 5) + blocks % size) % size;
+        const std::uint32_t old_read = context->field(9, 0, 5);
+        const std::uint32_t write = context->field(0, 27, 5);
+        const std::uint32_t writable = context->field(1, 31, 1);
+        const std::uint32_t available = writable ? (write + size - old_read) % size : size;
+        const std::uint32_t moved = blocks % size;
+        const std::uint32_t read = (old_read + moved) % size;
         context->set_field(9, 0, 5, read);
         if (blocks > 0) context->set_field(1, 31, 1, 1);
         if (slot.voice) {
             slot.voice->trace.taken += blocks;
             ++slot.voice->trace.takes;
             slot.voice->trace.partial_takes += blocks < size ? 1u : 0u;
+            if (moved > available) {
+                ++slot.voice->trace.underrun_reads;
+                slot.voice->trace.underrun_blocks += moved - available;
+            }
         }
         advanced = true;
     }
