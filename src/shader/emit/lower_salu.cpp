@@ -18,6 +18,7 @@ namespace {
 
 constexpr std::uint64_t kCodeCbvSize = 0x1'0000;
 constexpr std::pair<std::uint32_t, std::uint32_t> kRawBufferSrv{11, 0};
+constexpr std::uint32_t kResourceDescriptorBytes = 32;
 
 bool strip(std::string_view text, std::string_view prefix, std::string_view* rest) {
     if (!text.starts_with(prefix)) return false;
@@ -553,6 +554,21 @@ void Lower::smem(const IrInst& inst, Site site) {
     }
 }
 
+bool Lower::defer_descriptor_address(Value value, const Source& src, const UsedResource& used,
+                                    UserData::Source source) {
+    const auto tracked = scalar_.find(src.load);
+    if (tracked == scalar_.end()) return false;
+    const Address& address = tracked->second;
+    if (address.dynamic || address.param >= x_->native->layout.size()) return false;
+    const RootParam& root = x_->native->layout[address.param];
+    const std::uint64_t byte = address.offset + sizeof(std::uint32_t) * std::uint64_t{src.first};
+    if (root.root.kind != RootType::Kind::Table || byte % kResourceDescriptorBytes != 0 ||
+        byte / sizeof(std::uint32_t) != used.table_offset_dwords)
+        return false;
+    descriptor_addresses_[value] = {0, root.slot, root.root, used.table_offset_dwords, source};
+    return true;
+}
+
 void Lower::descriptor_data(const IrInst& inst, Site site) {
     constexpr Why other = "a descriptor's address or format read as data";
     const auto* fields = std::get_if<SmemFields>(&inst.fields);
@@ -589,6 +605,18 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
     const std::uint32_t u = uav ? 0x1000 : 0;
     std::pair<std::uint32_t, std::uint32_t> props;
     std::optional<std::uint32_t> image;
+    const bool scalar_buffer = std::holds_alternative<SmemFields>(ui.fields) && un.starts_with("s_buffer_load_dword");
+    const bool scalar_srv = scalar_buffer && used != nullptr && used->kind.kind == ResourceType::Kind::Srv;
+    if (scalar_buffer && used != nullptr && used->kind.kind == ResourceType::Kind::Cbv) {
+        for (std::uint32_t k = 0; k < count; ++k) {
+            const auto v = inst.write(Reg::s(static_cast<std::uint8_t>(code + k)));
+            if (!v) continue;
+            if (k == first && defer_descriptor_address(*v, src, *used, UserData::Source::ConstantBufferAddressLow))
+                continue;
+            vals_[*v] = Val::missing("a scalar memory read as data");
+        }
+        return;
+    }
     if (const auto* image_fields = std::get_if<ImageFields>(&ui.fields)) {
         const std::uint8_t dim = image_fields->dim;
         std::uint32_t kind = 0;
@@ -612,8 +640,7 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
         }
         if (used != nullptr && used->kind.kind == ResourceType::Kind::Cbv)
             fail("a constant buffer's descriptor read as data");
-    } else if (std::holds_alternative<SmemFields>(ui.fields) && un.starts_with("s_buffer_load_dword") &&
-               used != nullptr && used->kind.kind == ResourceType::Kind::Srv) {
+    } else if (scalar_srv) {
         props = kRawBufferSrv;
     } else {
         fail("a scalar memory read as data");
@@ -677,8 +704,11 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
         if (found != words.end()) {
             write(inst, Reg::s(static_cast<std::uint8_t>(code + k)), found->second, std::nullopt);
         } else {
-            if (const std::optional<Value> v = inst.write(Reg::s(static_cast<std::uint8_t>(code + k))))
-                vals_[*v] = Val::missing(other);
+            const auto v = inst.write(Reg::s(static_cast<std::uint8_t>(code + k)));
+            if (!v) continue;
+            if (rel == 0 && scalar_srv && defer_descriptor_address(*v, src, *used, UserData::Source::ShaderBufferAddressLow))
+                continue;
+            vals_[*v] = Val::missing(other);
         }
     }
 }

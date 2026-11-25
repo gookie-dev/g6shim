@@ -951,6 +951,12 @@ Val Lower::get(Value v) {
         vals_[v] = val;
         return val;
     }
+    const auto address = descriptor_addresses_.find(v);
+    if (address != descriptor_addresses_.end()) {
+        const Val val = descriptor_address(address->second);
+        vals_[v] = val;
+        return val;
+    }
     fail("a value defined after its use");
 }
 
@@ -969,6 +975,29 @@ Val Lower::user(std::size_t param, std::uint32_t dword) {
         return Val::missing("a root descriptor");
     const std::uint32_t index = static_cast<std::uint32_t>(rp.user_data) + dword;
     user_reads_[index] = UserData{index, rp.slot, rp.root, dword};
+    return user_dword(index);
+}
+
+Val Lower::descriptor_address(UserData data) {
+    constexpr std::uint32_t kRootDwords = 64;
+    std::uint32_t index = 0;
+    for (const RootParam& param : x_->native->layout) {
+        if (param.user_data >= kRootDwords || param.sgprs > kRootDwords - param.user_data)
+            fail("a buffer descriptor address beyond host root constants");
+        index = std::max(index, std::uint32_t{param.user_data} + param.sgprs);
+    }
+    for (const auto& [used_index, entry] : user_reads_) {
+        if (entry.source == data.source && entry.slot == data.slot && entry.dword == data.dword)
+            return user_dword(used_index);
+        index = std::max(index, used_index + 1);
+    }
+    if (index >= kRootDwords) fail("a buffer descriptor address beyond host root constants");
+    data.index = index;
+    user_reads_.emplace(index, data);
+    return user_dword(index);
+}
+
+Val Lower::user_dword(std::uint32_t index) {
     s_.user_data = std::max(s_.user_data, index + 1);
     V h;
     if (user_data_) {
@@ -1997,6 +2026,13 @@ void Lower::fill_phis() {
             if (!tail_[q]) continue;
             const std::size_t qb = edges_.contains({q, b}) ? edges_.at({q, b}) : *tail_[q];
             const Value arg = phi.args[n];
+            if (read && !bit && descriptor_addresses_.contains(arg) && !vals_.contains(arg)) {
+                try {
+                    (void)get(arg);
+                } catch (const WhyError& error) {
+                    throw Stop::retry(phi.value, error.why);
+                }
+            }
             const auto found = vals_.find(arg);
             V x;
             if (found != vals_.end() && found->second.kind == Val::Kind::I32 && !bit) {

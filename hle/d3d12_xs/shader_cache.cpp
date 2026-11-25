@@ -24,7 +24,7 @@ using g6shim::shader::RootType;
 using g6shim::shader::emit::HostShader;
 using g6shim::shader::emit::StaticSampler;
 
-constexpr std::array<std::uint8_t, 4> kMagic{'V', 'S', 'H', '1'};
+constexpr std::array<std::uint8_t, 4> kMagic{'V', 'S', 'H', '2'};
 constexpr std::array<HwStage, 8> kStages{HwStage::Ls, HwStage::Hs, HwStage::Es, HwStage::Gs,
                                          HwStage::Vs, HwStage::Ps, HwStage::Ms, HwStage::Cs};
 constexpr std::size_t kMaxEntryBytes = 256u << 20;
@@ -249,7 +249,8 @@ std::vector<std::uint8_t> encode_entry(const HostShader& shader) {
     word(static_cast<std::uint32_t>(shader.user_data.size()));
     for (const auto& entry : shader.user_data) {
         for (const std::uint32_t value : {entry.index, static_cast<std::uint32_t>(entry.slot),
-                                          root_code(entry.root), entry.dword})
+                                          root_code(entry.root), entry.dword,
+                                          static_cast<std::uint32_t>(entry.source)})
             word(value);
     }
     word(static_cast<std::uint32_t>(shader.samplers.size()));
@@ -290,9 +291,17 @@ std::optional<HostShader> decode_entry(std::span<const std::uint8_t> bytes) {
         const auto slot = reader.word();
         const auto root = reader.word();
         const auto dword = reader.word();
-        if (!index || !slot || !root || !dword || *slot > 0xFF) return std::nullopt;
-        shader.user_data.push_back(
-            g6shim::shader::emit::UserData{*index, static_cast<std::uint8_t>(*slot), root_type(*root), *dword});
+        const auto source = reader.word();
+        using UserData = g6shim::shader::emit::UserData;
+        using Source = UserData::Source;
+        if (!index || !slot || !root || !dword || !source || *slot > 0xFF ||
+            *source > static_cast<std::uint32_t>(Source::ShaderBufferAddressLow))
+            return std::nullopt;
+        const RootType type = root_type(*root);
+        if (*source != static_cast<std::uint32_t>(Source::Root) && type.kind != RootType::Kind::Table)
+            return std::nullopt;
+        shader.user_data.push_back(UserData{*index, static_cast<std::uint8_t>(*slot), type, *dword,
+                                            static_cast<Source>(*source)});
     }
     const auto samplers = reader.word();
     if (!samplers) return std::nullopt;

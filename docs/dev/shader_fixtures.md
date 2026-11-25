@@ -20,6 +20,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `scalar_buffer_length.s` binds an input resource at the start of the table and an output UAV at byte offset `0x20`. It stores the input length and the result of a scalar buffer load in the UAV.
 
+`scalar_buffer_address.s` uses the same bindings. A branch joins the low address word with a zero value before the store. The test uses both shader-resource and constant-buffer input views.
+
 ## Adding a program
 
 1. Write `tests/gfx10/<rule>.s` in the frame above; the file name is the fixture's name.

@@ -317,6 +317,21 @@ const descriptor::Heap* State::heap_of(std::uint64_t handle) const {
     return nullptr;
 }
 
+std::optional<std::uint32_t> State::descriptor_address(
+    bool compute, const g6shim::shader::emit::UserData& data) const {
+    const auto& all = roots(compute);
+    if (data.slot >= all.size()) return std::nullopt;
+    const Root& root = all[data.slot];
+    if (root.kind != Root::Kind::kTable) return std::nullopt;
+    const descriptor::Heap* heap = heap_of(root.value);
+    if (heap == nullptr) return std::nullopt;
+    using Source = g6shim::shader::emit::UserData::Source;
+    const auto address = descriptor_host::table_buffer_address(
+        *heap, root.value, data.dword, data.source == Source::ConstantBufferAddressLow);
+    if (!address) return std::nullopt;
+    return static_cast<std::uint32_t>(*address);
+}
+
 bool State::prepare(host::HostList& list, bool indexed) { return prepare_for(list, indexed, false); }
 
 bool State::prepare_for(host::HostList& list, bool indexed, bool mesh) {
@@ -402,6 +417,23 @@ bool State::bind(host::HostList& list, const pipeline_host::HostPipeline& pipeli
             });
             return false;
         }
+        using Source = g6shim::shader::emit::UserData::Source;
+        std::vector<std::uint32_t> values;
+        if (stage.user_data) {
+            values.resize(stage.user_data->second);
+            for (const auto& data : translated->host.user_data) {
+                if (data.source == Source::Root) continue;
+                const auto address = descriptor_address(compute, data);
+                if (!address || data.index >= values.size()) {
+                    static std::once_flag once;
+                    std::call_once(once, [] {
+                        G6SHIM_WARN("d3d12_xs: a shader reads the address of an unavailable buffer descriptor");
+                    });
+                    return false;
+                }
+                values[data.index] = *address;
+            }
+        }
         table_failed_ = false;
         const auto made = tables(list, translated->used, compute);
         if (table_failed_) {
@@ -413,8 +445,8 @@ bool State::bind(host::HostList& list, const pipeline_host::HostPipeline& pipeli
         }
         if (stage.user_data) {
             const auto [parameter, dwords] = *stage.user_data;
-            std::vector<std::uint32_t> values(dwords, 0);
             for (const auto& data : translated->host.user_data) {
+                if (data.source != Source::Root) continue;
                 const auto fresh = std::find_if(made.begin(), made.end(), [&](const auto& entry) {
                     return entry.first == data.slot && data.root.kind == RootKind::Kind::Table;
                 });

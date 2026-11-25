@@ -21,10 +21,13 @@
 namespace g6shim::shader::emit {
 
 struct UserData {
+    enum class Source : std::uint32_t { Root, ConstantBufferAddressLow, ShaderBufferAddressLow };
+
     std::uint32_t index = 0;
     std::uint8_t slot = 0;
     RootType root;
     std::uint32_t dword = 0;
+    Source source = Source::Root;
 
     friend bool operator==(const UserData&, const UserData&) = default;
 };

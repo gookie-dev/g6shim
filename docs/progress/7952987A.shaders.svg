@@ -28,7 +28,7 @@
 <rect x="343" y="16" width="8" height="8" fill="#57606a"/>
 </g>
 <text x="14" y="35">ps</text>
-<text x="144" y="35" text-anchor="end">10137/12069</text>
+<text x="144" y="35" text-anchor="end">10141/12069</text>
 <g shape-rendering="crispEdges">
 <rect x="154" y="28" width="8" height="8" fill="#2ea043"/>
 <rect x="163" y="28" width="8" height="8" fill="#2ea043"/>
@@ -184,7 +184,7 @@
 <rect x="397" y="52" width="8" height="8" fill="#57606a"/>
 </g>
 <text x="14" y="71">ms</text>
-<text x="144" y="71" text-anchor="end">8380/8765</text>
+<text x="144" y="71" text-anchor="end">8392/8765</text>
 <g shape-rendering="crispEdges">
 <rect x="154" y="64" width="8" height="8" fill="#2ea043"/>
 <rect x="163" y="64" width="8" height="8" fill="#2ea043"/>

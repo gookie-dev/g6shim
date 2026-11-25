@@ -35,6 +35,13 @@ constexpr std::uint32_t kUserSgprs = 5;
 constexpr std::uint32_t kUserSgprShift = 1;
 constexpr std::uint32_t kSecondDescriptorDword = 8;
 constexpr std::string_view kScalarBufferLength = "scalar_buffer_length";
+constexpr std::string_view kScalarBufferAddress = "scalar_buffer_address";
+
+const Fixture* find_fixture(std::string_view name) {
+    const auto found = std::find_if(std::begin(kFixtures), std::end(kFixtures),
+                                   [name](const Fixture& entry) { return entry.name == name; });
+    return found == std::end(kFixtures) ? nullptr : found;
+}
 
 Lowered lower_fixture(const Fixture& fixture, const std::vector<UsedResource>& used) {
     return lower_compute(fixture.words, kFixtureVgprs,
@@ -48,7 +55,7 @@ Lowered lower_fixture(const Fixture& fixture, const std::vector<UsedResource>& u
 TEST(shader_fixtures_translate_and_validate) {
     CHECK(std::size(kFixtures) > 0);
     for (const Fixture& fixture : kFixtures) {
-        if (fixture.name == kScalarBufferLength) continue;
+        if (fixture.name == kScalarBufferLength || fixture.name == kScalarBufferAddress) continue;
         bool translated = true;
         Lowered lowered;
         try {
@@ -65,10 +72,9 @@ TEST(shader_fixtures_translate_and_validate) {
 }
 
 TEST(shader_fixtures_translate_scalar_buffer_length_and_load) {
-    const auto fixture = std::find_if(std::begin(kFixtures), std::end(kFixtures),
-                                      [](const Fixture& entry) { return entry.name == kScalarBufferLength; });
-    CHECK(fixture != std::end(kFixtures));
-    if (fixture == std::end(kFixtures)) return;
+    const Fixture* fixture = find_fixture(kScalarBufferLength);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
     UsedResource input = used_uav(kTableUserData, kTableSlot);
     input.kind.kind = ResourceType::Kind::Srv;
     UsedResource output = used_uav(kTableUserData, kTableSlot);
@@ -76,6 +82,31 @@ TEST(shader_fixtures_translate_scalar_buffer_length_and_load) {
     for (const std::uint32_t stride : {0u, 1u}) {
         input.stride = stride;
         const Lowered lowered = lower_fixture(*fixture, {input, output});
+        check_dxil(lowered.dxil, fixture->name);
+    }
+}
+
+TEST(shader_fixtures_translate_scalar_buffer_address_at_a_join) {
+    const Fixture* fixture = find_fixture(kScalarBufferAddress);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    UsedResource input = used_uav(kTableUserData, kTableSlot);
+    UsedResource output = used_uav(kTableUserData, kTableSlot);
+    output.table_offset_dwords = kSecondDescriptorDword;
+    using Kind = ResourceType::Kind;
+    using Source = UserData::Source;
+    for (const Kind kind : {Kind::Srv, Kind::Cbv}) {
+        input.kind.kind = kind;
+        const Lowered lowered = lower_fixture(*fixture, {input, output});
+        const Source source = kind == Kind::Cbv ? Source::ConstantBufferAddressLow : Source::ShaderBufferAddressLow;
+        const auto address = std::find_if(lowered.user_data.begin(), lowered.user_data.end(),
+                                          [source](const UserData& entry) { return entry.source == source; });
+        CHECK(address != lowered.user_data.end());
+        if (address != lowered.user_data.end()) {
+            CHECK(address->index == kUserSgprs);
+            CHECK(address->slot == kTableSlot);
+            CHECK(address->dword == 0);
+        }
         check_dxil(lowered.dxil, fixture->name);
     }
 }

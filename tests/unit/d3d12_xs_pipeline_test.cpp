@@ -182,6 +182,8 @@ emit::HostShader sample_shader() {
     g6shim::shader::RootType root;
     root.kind = g6shim::shader::RootType::Kind::Table;
     shader.user_data.push_back(emit::UserData{8, 1, root, 0});
+    shader.user_data.push_back(emit::UserData{9, 1, root, 8, emit::UserData::Source::ConstantBufferAddressLow});
+    shader.user_data.push_back(emit::UserData{10, 1, root, 16, emit::UserData::Source::ShaderBufferAddressLow});
     shader.samplers.push_back({0x400, 0xC0'0000, 0x18F0'0000, 0});
     shader.static_samplers.push_back(emit::StaticSampler::from_words({0x400, 0xC0'0000, 0x18F0'0000, 0}));
     shader.root_cbvs = {2};
@@ -333,8 +335,11 @@ TEST(d3d12_xs_pipeline_shader_entries_round_trip_and_reject_damage) {
     damaged = encoded;
     damaged.push_back(0);
     CHECK(!shader_cache::decode_entry(damaged).has_value());
-    const std::array<std::uint8_t, 4> wrong{'V', 'S', 'H', '0'};
+    const std::array<std::uint8_t, 4> wrong{'V', 'S', 'H', '1'};
     CHECK(!shader_cache::decode_entry(wrong).has_value());
+    emit::HostShader bad_source = original;
+    bad_source.user_data.back().source = static_cast<emit::UserData::Source>(3);
+    CHECK(!shader_cache::decode_entry(shader_cache::encode_entry(bad_source)).has_value());
 }
 
 TEST(d3d12_xs_shader_cache_root_prefers_the_override_folder) {

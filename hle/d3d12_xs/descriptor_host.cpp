@@ -313,8 +313,10 @@ void null_for(const descriptor::View& view, D3D12_CPU_DESCRIPTOR_HANDLE at) {
 std::optional<std::pair<std::uint64_t, std::uint64_t>> srv_range(std::uint64_t base,
                                                                  const std::array<std::uint32_t, 10>& words) {
     const D3D12_SHADER_RESOURCE_VIEW_DESC desc = srv_desc(words);
+    if (desc.ViewDimension != D3D12_SRV_DIMENSION_BUFFER) return std::nullopt;
     const std::uint64_t element = element_size(desc);
-    if (element == 0) return std::nullopt;
+    if (element == 0 || desc.Buffer.FirstElement > (std::numeric_limits<std::uint64_t>::max() - base) / element)
+        return std::nullopt;
     return std::make_pair(base + desc.Buffer.FirstElement * element,
                           static_cast<std::uint64_t>(desc.Buffer.NumElements) * element);
 }
@@ -666,6 +668,41 @@ std::optional<std::pair<std::uint64_t, std::uint64_t>> buffer_range(const descri
         return unordered_range(reinterpret_cast<std::uint64_t>(bytes->first), *unordered->desc);
     }
     return std::nullopt;
+}
+
+std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, std::uint64_t table,
+                                                  std::uint32_t dword, bool constant_buffer) {
+    if (heap.desc.kind != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || !heap.index(table))
+        return std::nullopt;
+    const std::uint32_t step = descriptor::increment_size(nullptr, heap.desc.kind);
+    const std::uint64_t offset = sizeof(std::uint32_t) * std::uint64_t{dword};
+    if ((table - heap.start) % step != 0 || offset % step != 0 ||
+        table > std::numeric_limits<std::uint64_t>::max() - offset || !heap.index(table + offset))
+        return std::nullopt;
+    const auto view = descriptor::view(table + offset);
+    if (!view) return std::nullopt;
+    if (constant_buffer) {
+        const auto* buffer = std::get_if<descriptor::ConstantView>(&*view);
+        if (buffer != nullptr) return buffer->address;
+        return std::nullopt;
+    }
+    if (const auto* srv = std::get_if<descriptor::ShaderView>(&*view)) {
+        if (srv->resource == 0) {
+            if (!srv->desc || srv_desc(*srv->desc).ViewDimension == D3D12_SRV_DIMENSION_BUFFER) return 0;
+            return std::nullopt;
+        }
+        if (!srv->desc) {
+            const auto bytes = resource::buffer_bytes(reinterpret_cast<Object*>(srv->resource));
+            if (!bytes) return std::nullopt;
+            return reinterpret_cast<std::uint64_t>(bytes->first);
+        }
+    } else {
+        const auto* placed = std::get_if<descriptor::PlacedView>(&*view);
+        if (placed == nullptr || placed->unordered) return std::nullopt;
+    }
+    const auto range = buffer_range(*view);
+    if (!range) return std::nullopt;
+    return range->first;
 }
 
 std::optional<descriptor::View> placed_texture(const descriptor::View& view) {

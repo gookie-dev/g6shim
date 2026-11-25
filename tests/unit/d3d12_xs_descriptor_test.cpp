@@ -3,6 +3,7 @@
 #include "check.hpp"
 
 #include "d3d12_xs/descriptor.hpp"
+#include "d3d12_xs/descriptor_host.hpp"
 #include "d3d12_xs/object.hpp"
 
 #include <array>
@@ -92,6 +93,51 @@ TEST(d3d12_xs_views_die_with_their_resource) {
     std::memcpy(old_words.data(), reinterpret_cast<const void*>(static_cast<std::uintptr_t>(a)), sizeof old_words);
     std::memcpy(new_words.data(), reinterpret_cast<const void*>(static_cast<std::uintptr_t>(b)), sizeof new_words);
     CHECK(old_words != new_words);
+}
+
+TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
+    constexpr std::uint32_t kSlots = 4;
+    constexpr std::uint32_t kSlotDwords = 8;
+    const descriptor::HeapDesc desc{0, kSlots, 1, 0};
+    const descriptor::Placement none{0, 0};
+    Object* object = nullptr;
+    CHECK(create_heap_with(desc, none, &object) == S_OK);
+    if (object == nullptr) return;
+    const auto& heap = *static_cast<descriptor::Heap*>(object);
+    const std::uint64_t step = descriptor::increment_size(nullptr, desc.kind);
+    const std::uint64_t table = heap.start + step;
+    const std::array<std::uint32_t, 4> constant{0x1122'0000, 1, 256, 0};
+    descriptor::create_cbv(nullptr, constant.data(), table);
+
+    std::array<std::uint32_t, 14> resource_words{};
+    resource_words[0] = D3D12_RESOURCE_DIMENSION_BUFFER;
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R32_TYPELESS;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srv.Buffer.FirstElement = 3;
+    srv.Buffer.NumElements = 8;
+    srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+    std::array<std::uint32_t, 16> shader_words{};
+    std::memcpy(shader_words.data(), &srv, sizeof srv);
+    shader_words[10] = 0x3344'0000;
+    shader_words[11] = 2;
+    descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
+    descriptor::create_srv(nullptr, nullptr, shader_words.data(), table + 2 * step);
+
+    using descriptor_host::table_buffer_address;
+    CHECK(table_buffer_address(heap, table, 0, true) == 0x1'1122'0000ull);
+    CHECK(table_buffer_address(heap, table, kSlotDwords, false) == 0x2'3344'000Cull);
+    CHECK(table_buffer_address(heap, table, 2 * kSlotDwords, false) == 0ull);
+    CHECK(!table_buffer_address(heap, table, 0, false));
+    CHECK(!table_buffer_address(heap, table, kSlotDwords, true));
+    CHECK(!table_buffer_address(heap, table, kSlotDwords + 1, false));
+    CHECK(!table_buffer_address(heap, table + 4, 0, true));
+    CHECK(!table_buffer_address(heap, table, 3 * kSlotDwords, false));
+    shader_words[10] = 0xFFFF'FFFC;
+    shader_words[11] = 0xFFFF'FFFF;
+    descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
+    CHECK(!table_buffer_address(heap, table, kSlotDwords, false));
+    release(object);
 }
 
 TEST(d3d12_xs_placed_heaps_start_at_the_title_memory) {

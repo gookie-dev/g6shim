@@ -181,6 +181,10 @@ private:
     V scc_in(const IrInst& inst);
     void smem(const IrInst& inst, Site site);
     void descriptor_data(const IrInst& inst, Site site);
+    bool defer_descriptor_address(Value value, const Source& src, const UsedResource& used,
+                                  UserData::Source source);
+    Val descriptor_address(UserData data);
+    Val user_dword(std::uint32_t index);
     void code_smem(const IrInst& inst, Address a);
     V cbuffer_dword(V h, V a);
     std::vector<V> format_load(V h, V off, std::uint8_t format, std::uint32_t channels);
@@ -241,6 +245,7 @@ private:
     std::vector<std::tuple<V, std::size_t, std::size_t>> data_phis_;
     std::unordered_set<Value, ValueHash> read_phis_;
     std::unordered_map<Value, std::pair<std::size_t, std::uint32_t>, ValueHash> params_;
+    std::unordered_map<Value, UserData, ValueHash> descriptor_addresses_;
     std::optional<V> user_data_;
     std::map<std::uint32_t, UserData> user_reads_;
     std::vector<std::array<std::uint32_t, 4>> samplers_;
