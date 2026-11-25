@@ -80,28 +80,25 @@ void Lower::sop(const IrInst& inst) {
     if (name == "s_mov_b32" && lo && src.size() == 1) {
         const auto value = scalar_value(src[0]);
         const auto field = value ? descriptor_addresses_.find(*value) : descriptor_addresses_.end();
-        if (field != descriptor_addresses_.end() && field->second.known_bits() != UINT32_MAX) {
+        if (field != descriptor_addresses_.end() && field->second.accepts_mask()) {
             const UserData data = field->second;
             descriptor_addresses_[*lo] = data;
-            vals_[*lo] = Val::missing(kDescriptorData);
+            if (data.known_bits() != UINT32_MAX) vals_[*lo] = Val::missing(kDescriptorData);
             return;
         }
     }
     const std::size_t c = cur_;
-    const auto src32 = [&](std::size_t k) -> V {
+    const auto src32 = [&](std::size_t k, std::optional<std::uint32_t> mask = std::nullopt) -> V {
         if (k == 0 && (name == "s_addk_i32" || name == "s_mulk_i32")) {
             if (!dst) fail("a missing operand");
             return operand(inst, *dst);
         }
         if (k >= src.size()) fail("a missing operand");
-        return operand(inst, src[k]);
-    };
-    const auto masked_src32 = [&](std::size_t index, std::optional<std::uint32_t> mask) -> V {
-        if (mask && index < src.size()) {
-            const auto value = scalar_value(src[index]);
+        if (mask) {
+            const auto value = scalar_value(src[k]);
             if (value && has_partial_descriptor(*value)) return masked_descriptor_value(*value, *mask);
         }
-        return src32(index);
+        return operand(inst, src[k]);
     };
     const auto sext16 = [&]() -> V {
         const std::uint16_t value = imm.value_or(0);
@@ -192,8 +189,8 @@ void Lower::sop(const IrInst& inst) {
                     return UserData::kStructuredBufferHighMask;
                 return std::nullopt;
             };
-            a = masked_src32(0, compared_mask(0));
-            b = masked_src32(1, compared_mask(1));
+            a = src32(0, compared_mask(0));
+            b = src32(1, compared_mask(1));
         }
         const bool is_signed = cmp_op.ends_with("_i32");
         const std::string_view kind = cmp_op.substr(0, std::min<std::size_t>(2, cmp_op.size()));
@@ -388,7 +385,7 @@ void Lower::sop(const IrInst& inst) {
         const bool is_signed = name == "s_bfe_i32";
         const auto control = src.size() == 2 ? operand_constant(src[1]) : std::nullopt;
         const auto mask = control ? std::optional{extract_mask(*control, is_signed)} : std::nullopt;
-        const V a = masked_src32(0, mask);
+        const V a = src32(0, mask);
         const V b = src32(1);
         const V k16 = s_.m.i32(16);
         const V k127 = s_.m.i32(0x7F);
@@ -399,8 +396,8 @@ void Lower::sop(const IrInst& inst) {
                name == "s_andn2_b32" || name == "s_orn2_b32" || name == "s_nand_b32" ||
                name == "s_nor_b32" || name == "s_xnor_b32") {
         const bool and_mask = name == "s_and_b32" && src.size() == 2;
-        const V a = masked_src32(0, and_mask ? operand_constant(src[1]) : std::nullopt);
-        V b = masked_src32(1, and_mask ? operand_constant(src[0]) : std::nullopt);
+        const V a = src32(0, and_mask ? operand_constant(src[1]) : std::nullopt);
+        V b = src32(1, and_mask ? operand_constant(src[0]) : std::nullopt);
         const V ones = s_.m.i32(UINT32_MAX);
         if (name.find("n2") != std::string_view::npos) b = s_.m.bin(c, Bin::Xor, b, ones);
         const std::string_view op = name.substr(2, 3);
@@ -693,6 +690,14 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
     } else {
         fail("a scalar memory read as data");
     }
+    using SourceKind = UserData::Source;
+    const auto* buffer_fields = std::get_if<BufferFields>(&ui.fields);
+    const bool byte_addressed = buffer_fields != nullptr && !buffer_fields->idxen && buffer_fields->offen &&
+                                !buffer_fields->format;
+    const bool linear_raw = used != nullptr && used->kind.kind == ResourceType::Kind::Srv && used->stride <= 1 &&
+                            props == kRawBufferSrv && (scalar_srv || byte_addressed);
+    const bool structured = scalar_srv && used->stride >= 4 && used->stride % 4 == 0 &&
+                            used->stride <= UserData::kBufferStrideMask;
     const V h = handle(site, src, false, props);
     const std::size_t c = cur_;
     const Ty i32t = s_.t.i32;
@@ -759,14 +764,18 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
             if (rel == 0 && image && used != nullptr &&
                 defer_descriptor_address(*v, src, *used, UserData::Source::ImageBaseAddressLow))
                 continue;
-            if (scalar_srv && rel == 1) {
-                const std::uint32_t stride = used->stride;
-                const bool structured = stride >= 4 && stride % 4 == 0 && stride <= UserData::kBufferStrideMask;
-                defer_descriptor_address(*v, src, *used, structured ? UserData::Source::StructuredBufferHighWord
-                                                                  : UserData::Source::ShaderBufferAddressHigh);
+            if (linear_raw || structured) {
+                if (rel == 1 && defer_descriptor_address(*v, src, *used, structured ? SourceKind::StructuredBufferHighWord
+                                                                                  : SourceKind::LinearRawBufferHighWord))
+                    continue;
+                if (rel == 3 && defer_descriptor_address(*v, src, *used, structured ? SourceKind::StructuredBufferFormatWord
+                                                                                  : SourceKind::LinearRawBufferFormatWord))
+                    continue;
             }
+            if (scalar_srv && rel == 1)
+                defer_descriptor_address(*v, src, *used, SourceKind::ShaderBufferAddressHigh);
             if (scalar_srv && rel == 3)
-                defer_descriptor_address(*v, src, *used, UserData::Source::ShaderBufferComponentMapping);
+                defer_descriptor_address(*v, src, *used, SourceKind::ShaderBufferComponentMapping);
             vals_[*v] = Val::missing(kDescriptorData);
         }
     }

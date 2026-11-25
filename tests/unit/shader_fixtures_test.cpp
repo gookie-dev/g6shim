@@ -38,6 +38,7 @@ constexpr std::string_view kScalarBufferLength = "scalar_buffer_length";
 constexpr std::string_view kScalarBufferAddress = "scalar_buffer_address";
 constexpr std::string_view kScalarBufferFields = "scalar_buffer_fields";
 constexpr std::string_view kScalarStructuredFields = "scalar_structured_fields";
+constexpr std::string_view kScalarRawHighWord = "scalar_raw_buffer_high_word";
 constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 
 const Fixture* find_fixture(std::string_view name) {
@@ -60,7 +61,7 @@ TEST(shader_fixtures_translate_and_validate) {
     for (const Fixture& fixture : kFixtures) {
         if (fixture.name == kScalarBufferLength || fixture.name == kScalarBufferAddress ||
             fixture.name == kScalarBufferFields || fixture.name == kScalarStructuredFields ||
-            fixture.name == kScalarImageAddress)
+            fixture.name == kScalarRawHighWord || fixture.name == kScalarImageAddress)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -123,6 +124,7 @@ TEST(shader_fixtures_translate_masked_scalar_buffer_fields_at_a_join) {
     if (fixture == nullptr) return;
     UsedResource input = used_uav(kTableUserData, kTableSlot);
     input.kind.kind = ResourceType::Kind::Srv;
+    input.stride = 2;
     UsedResource output = used_uav(kTableUserData, kTableSlot);
     output.table_offset_dwords = kSecondDescriptorDword;
     const Lowered lowered = lower_fixture(*fixture, {input, output});
@@ -163,30 +165,40 @@ TEST(shader_fixtures_translate_structured_buffer_stride_and_zero_test) {
     UsedResource output = used_uav(kTableUserData, kTableSlot);
     output.table_offset_dwords = kSecondDescriptorDword;
     const Lowered lowered = lower_fixture(*fixture, {input, output});
-    const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(), [](const UserData& data) {
-        return data.source == UserData::Source::StructuredBufferHighWord;
-    });
-    CHECK(field != lowered.user_data.end());
-    if (field != lowered.user_data.end()) {
-        CHECK(field->slot == kTableSlot);
-        CHECK(field->dword == 0);
+    using Source = UserData::Source;
+    for (const Source source : {Source::StructuredBufferHighWord, Source::StructuredBufferFormatWord}) {
+        const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(),
+                                        [source](const UserData& data) { return data.source == source; });
+        CHECK(field != lowered.user_data.end());
+        if (field != lowered.user_data.end()) {
+            CHECK(field->slot == kTableSlot);
+            CHECK(field->dword == 0);
+        }
     }
     check_dxil(lowered.dxil, fixture->name);
+}
 
-    Fixture unknown = *fixture;
-    const std::uint32_t stride_mask = UserData::kBufferStrideMask << UserData::kBufferStrideShift;
-    const auto mask = std::find(unknown.words.begin(), unknown.words.end(), stride_mask);
-    CHECK(mask != unknown.words.end());
-    if (mask == unknown.words.end()) return;
-    *mask |= UserData::kStructuredBufferHighMask + 1;
-    bool rejected = false;
-    try {
-        (void)lower_fixture(unknown, {input, output});
-    } catch (const std::exception& error) {
-        rejected = std::string_view(error.what()).find("a descriptor's address or format read as data") !=
-                   std::string_view::npos;
+TEST(shader_fixtures_translate_raw_buffer_high_word_with_vector_user) {
+    const Fixture* fixture = find_fixture(kScalarRawHighWord);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    UsedResource input = used_uav(kTableUserData, kTableSlot);
+    input.kind.kind = ResourceType::Kind::Srv;
+    input.stride = 1;
+    UsedResource output = used_uav(kTableUserData, kTableSlot);
+    output.table_offset_dwords = kSecondDescriptorDword;
+    const Lowered lowered = lower_fixture(*fixture, {input, output});
+    using Source = UserData::Source;
+    for (const Source source : {Source::LinearRawBufferHighWord, Source::LinearRawBufferFormatWord}) {
+        const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(),
+                                        [source](const UserData& data) { return data.source == source; });
+        CHECK(field != lowered.user_data.end());
+        if (field != lowered.user_data.end()) {
+            CHECK(field->slot == kTableSlot);
+            CHECK(field->dword == 0);
+        }
     }
-    CHECK(rejected);
+    check_dxil(lowered.dxil, fixture->name);
 }
 
 TEST(shader_fixtures_translate_scalar_reads_of_image_addresses) {

@@ -12,6 +12,7 @@ s_mov_b32 s11, 0
 join:
 s_and_b32 s16, s9, 0xffff
 s_and_b32 s17, 0x100, s11
+s_and_b32 s19, s9, 0x40000000
 s_waitcnt lgkmcnt(0)
 v_mov_b32 v0, s16
 v_mov_b32 v1, s17

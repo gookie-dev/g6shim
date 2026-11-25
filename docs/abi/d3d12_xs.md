@@ -85,6 +85,8 @@ Masked scalar reads can use buffer descriptor word 1 bits 15:0 for the upper add
 
 For a structured buffer, word 1 bits 29:16 come from the view's nonzero byte stride. A comparison of that word against zero uses the packed address and stride. A bound structured view always has a nonzero stride and an unbound descriptor is all zero.
 
+Explicit raw and structured buffer views supply word 1 with zero swizzle bits. Raw views have a zero stride. For ordinary views with identity component mapping, word 3 uses unsigned 32-bit format and resource level 1. Its bounds mode is 3 for raw byte ranges and 1 for structured record indices. These encodings were observed in synthetic SDK-created views on devices `1002:13C0` and `1002:744C`. The draw verifies the view kind before supplying either complete word.
+
 Image base-address words in fixed table slots use the same binding path. The source is the texture's title-facing memory address or the explicit address in a placed view. The image descriptor stores the base in units of 256 bytes.
 
 ## Device slots

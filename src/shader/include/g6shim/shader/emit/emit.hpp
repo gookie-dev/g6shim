@@ -23,7 +23,8 @@ namespace g6shim::shader::emit {
 struct UserData {
     enum class Source : std::uint32_t {
         Root, ConstantBufferAddressLow, ShaderBufferAddressLow, ImageBaseAddressLow,
-        ShaderBufferAddressHigh, ShaderBufferComponentMapping, StructuredBufferHighWord
+        ShaderBufferAddressHigh, ShaderBufferComponentMapping, StructuredBufferHighWord,
+        LinearRawBufferHighWord, LinearRawBufferFormatWord, StructuredBufferFormatWord
     };
 
     std::uint32_t index = 0;
@@ -42,8 +43,13 @@ struct UserData {
     constexpr std::uint32_t known_bits() const {
         if (source == Source::ShaderBufferAddressHigh) return kBufferAddressHighMask;
         if (source == Source::ShaderBufferComponentMapping) return kBufferComponentMappingMask;
-        if (source == Source::StructuredBufferHighWord) return kStructuredBufferHighMask;
         return UINT32_MAX;
+    }
+
+    constexpr bool accepts_mask() const {
+        return known_bits() != UINT32_MAX || source == Source::LinearRawBufferHighWord ||
+               source == Source::StructuredBufferHighWord || source == Source::LinearRawBufferFormatWord ||
+               source == Source::StructuredBufferFormatWord;
     }
 
     friend bool operator==(const UserData&, const UserData&) = default;

@@ -68,7 +68,7 @@ Each square is one function: green implemented, blue forwarded, amber stubbed, g
 
 ![7952987A shader coverage](docs/progress/7952987A.shaders.svg)
 
-39/39 functions implemented, 0 forwarded, 0 stubbed, 0 missing; shaders: 22264/25985 translated, 3689 decoded.
+39/39 functions implemented, 0 forwarded, 0 stubbed, 0 missing; shaders: 22266/25985 translated, 3687 decoded.
 
 ![Replacement DLL coverage](docs/progress/hle.svg)
 <!-- progress:end -->

@@ -332,6 +332,11 @@ std::optional<std::uint32_t> State::descriptor_value(
         return descriptor_host::table_buffer_component_mapping(*heap, root.value, data.dword);
     if (data.source == Source::StructuredBufferHighWord)
         return descriptor_host::table_structured_buffer_high_word(*heap, root.value, data.dword);
+    if (data.source == Source::LinearRawBufferHighWord)
+        return descriptor_host::table_linear_raw_buffer_high_word(*heap, root.value, data.dword);
+    if (data.source == Source::LinearRawBufferFormatWord || data.source == Source::StructuredBufferFormatWord)
+        return descriptor_host::table_untyped_buffer_format_word(
+            *heap, root.value, data.dword, data.source == Source::StructuredBufferFormatWord);
     const auto address = descriptor_host::table_buffer_address(
         *heap, root.value, data.dword, data.source == Source::ConstantBufferAddressLow);
     if (!address) return std::nullopt;

@@ -755,6 +755,20 @@ bool null_shader_buffer(const descriptor::View& view) {
     return srv != nullptr && srv->resource == 0 && (!srv->desc || shader_buffer_desc(view));
 }
 
+std::optional<std::uint32_t> structured_buffer_stride(const D3D12_SHADER_RESOURCE_VIEW_DESC& desc) {
+    if (desc.Format != DXGI_FORMAT_UNKNOWN || desc.Buffer.Flags != D3D12_BUFFER_SRV_FLAG_NONE)
+        return std::nullopt;
+    const std::uint32_t stride = desc.Buffer.StructureByteStride;
+    if (stride < 4 || stride % 4 != 0 || stride > g6shim::shader::emit::UserData::kBufferStrideMask)
+        return std::nullopt;
+    return stride;
+}
+
+bool linear_raw_buffer(const D3D12_SHADER_RESOURCE_VIEW_DESC& desc) {
+    return desc.Format == DXGI_FORMAT_R32_TYPELESS && desc.Buffer.Flags == D3D12_BUFFER_SRV_FLAG_RAW &&
+           desc.Buffer.StructureByteStride == 0;
+}
+
 }  // namespace
 
 std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, std::uint64_t table,
@@ -773,15 +787,45 @@ std::optional<std::uint32_t> table_structured_buffer_high_word(const descriptor:
     if (!view) return std::nullopt;
     if (null_shader_buffer(*view)) return 0;
     const auto desc = shader_buffer_desc(*view);
-    if (!desc || desc->Format != DXGI_FORMAT_UNKNOWN || desc->Buffer.Flags != D3D12_BUFFER_SRV_FLAG_NONE)
-        return std::nullopt;
+    if (!desc) return std::nullopt;
+    const auto stride = structured_buffer_stride(*desc);
+    if (!stride) return std::nullopt;
     using UserData = g6shim::shader::emit::UserData;
-    const std::uint32_t stride = desc->Buffer.StructureByteStride;
-    if (stride < 4 || stride % 4 != 0 || stride > UserData::kBufferStrideMask) return std::nullopt;
     const auto address = shader_buffer_address(*view);
     if (!address) return std::nullopt;
     const std::uint32_t high = static_cast<std::uint32_t>(*address >> 32) & UserData::kBufferAddressHighMask;
-    return (stride << UserData::kBufferStrideShift) | high;
+    return (*stride << UserData::kBufferStrideShift) | high;
+}
+
+std::optional<std::uint32_t> table_linear_raw_buffer_high_word(const descriptor::Heap& heap, std::uint64_t table,
+                                                              std::uint32_t dword) {
+    const auto view = table_view(heap, table, dword);
+    if (!view) return std::nullopt;
+    if (null_shader_buffer(*view)) return 0;
+    const auto desc = shader_buffer_desc(*view);
+    if (!desc || !linear_raw_buffer(*desc)) return std::nullopt;
+    const auto address = shader_buffer_address(*view);
+    if (!address || *address % D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT != 0) return std::nullopt;
+    return static_cast<std::uint32_t>(*address >> 32) & g6shim::shader::emit::UserData::kBufferAddressHighMask;
+}
+
+std::optional<std::uint32_t> table_untyped_buffer_format_word(const descriptor::Heap& heap, std::uint64_t table,
+                                                              std::uint32_t dword, bool structured) {
+    const auto view = table_view(heap, table, dword);
+    if (!view) return std::nullopt;
+    if (null_shader_buffer(*view)) return 0;
+    const auto desc = shader_buffer_desc(*view);
+    if (!desc || desc->Shader4ComponentMapping != D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING) return std::nullopt;
+    if (structured ? !structured_buffer_stride(*desc) : !linear_raw_buffer(*desc)) return std::nullopt;
+    const auto address = shader_buffer_address(*view);
+    if (!address || (!structured && *address % D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT != 0)) return std::nullopt;
+    constexpr std::uint32_t kIdentitySelectors = 4u | (5u << 3) | (6u << 6) | (7u << 9);
+    constexpr std::uint32_t kUint32Format = 20u << 12;
+    constexpr std::uint32_t kResourceLevel = 1u << 24;
+    constexpr std::uint32_t kIndexBounds = 1u;
+    constexpr std::uint32_t kByteBounds = 3u;
+    const std::uint32_t bounds = structured ? kIndexBounds : kByteBounds;
+    return kIdentitySelectors | kUint32Format | kResourceLevel | (bounds << 28);
 }
 
 std::optional<std::uint32_t> table_buffer_component_mapping(const descriptor::Heap& heap, std::uint64_t table,

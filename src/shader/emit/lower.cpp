@@ -2008,7 +2008,7 @@ bool Lower::has_partial_descriptor(Value value) const {
         work.pop_back();
         if (!visited.insert(v).second) continue;
         const auto field = descriptor_addresses_.find(v);
-        if (field != descriptor_addresses_.end() && field->second.known_bits() != UINT32_MAX) return true;
+        if (field != descriptor_addresses_.end() && field->second.accepts_mask()) return true;
         const auto at = phi_at_.find(v);
         if (at == phi_at_.end() || is_mask(v) || x_->st->highs.contains(v)) continue;
         const auto [b, i] = at->second;
@@ -2022,10 +2022,15 @@ V Lower::masked_descriptor_value(Value value, std::uint32_t mask) {
     constexpr Why unknown_bits = "a descriptor's address or format read as data";
     const auto field = descriptor_addresses_.find(value);
     if (field != descriptor_addresses_.end()) {
-        if ((mask & ~field->second.known_bits()) != 0) fail(unknown_bits);
+        using Source = UserData::Source;
         UserData data = field->second;
-        if (data.source == UserData::Source::StructuredBufferHighWord && (mask & ~UserData::kBufferAddressHighMask) == 0)
-            data.source = UserData::Source::ShaderBufferAddressHigh;
+        if ((data.source == Source::StructuredBufferHighWord || data.source == Source::LinearRawBufferHighWord) &&
+            (mask & ~UserData::kBufferAddressHighMask) == 0)
+            data.source = Source::ShaderBufferAddressHigh;
+        if ((data.source == Source::StructuredBufferFormatWord || data.source == Source::LinearRawBufferFormatWord) &&
+            (mask & ~UserData::kBufferComponentMappingMask) == 0)
+            data.source = Source::ShaderBufferComponentMapping;
+        if ((mask & ~data.known_bits()) != 0) fail(unknown_bits);
         return descriptor_address(data).value;
     }
     const auto at = phi_at_.find(value);
