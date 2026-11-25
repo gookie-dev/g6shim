@@ -191,6 +191,9 @@ emit::HostShader sample_shader() {
     shader.user_data.push_back(emit::UserData{15, 1, root, 16, emit::UserData::Source::LinearRawBufferHighWord});
     shader.user_data.push_back(emit::UserData{16, 1, root, 16, emit::UserData::Source::LinearRawBufferFormatWord});
     shader.user_data.push_back(emit::UserData{17, 1, root, 16, emit::UserData::Source::StructuredBufferFormatWord});
+    shader.user_data.push_back(emit::UserData{18, 1, root, 24, emit::UserData::Source::ImageSamplingFields});
+    shader.user_data.push_back(emit::UserData{19, 1, root, 16, emit::UserData::Source::TypedBufferFormatWord});
+    shader.user_data.push_back(emit::UserData{20, 1, root, 16, emit::UserData::Source::TypedBufferHighWord});
     shader.samplers.push_back({0x400, 0xC0'0000, 0x18F0'0000, 0});
     shader.static_samplers.push_back(emit::StaticSampler::from_words({0x400, 0xC0'0000, 0x18F0'0000, 0}));
     shader.root_cbvs = {2};

@@ -84,10 +84,14 @@ std::optional<std::uint32_t> table_structured_buffer_high_word(const descriptor:
                                                               std::uint32_t dword);
 std::optional<std::uint32_t> table_untyped_buffer_format_word(const descriptor::Heap& heap, std::uint64_t table,
                                                               std::uint32_t dword, bool structured);
+std::optional<std::uint32_t> table_typed_buffer_word(const descriptor::Heap& heap, std::uint64_t table,
+                                                     std::uint32_t dword, bool high_address);
 std::optional<std::uint32_t> table_buffer_component_mapping(const descriptor::Heap& heap, std::uint64_t table,
                                                             std::uint32_t dword);
 std::optional<std::uint32_t> table_image_base_word(const descriptor::Heap& heap, std::uint64_t table,
                                                  std::uint32_t dword);
+std::optional<std::uint32_t> table_image_sampling_fields(const descriptor::Heap& heap, std::uint64_t table,
+                                                        std::uint32_t dword);
 std::optional<descriptor::View> placed_texture(const descriptor::View& view);
 std::string near_heaps(std::uint64_t va);
 D3D12_UNORDERED_ACCESS_VIEW_DESC null_uav_desc(std::optional<std::uint32_t> dimension);

@@ -182,6 +182,21 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     CHECK(!table_untyped_buffer_format_word(heap, table, kSlotDwords + 1, true));
     CHECK(!table_structured_buffer_high_word(heap, table, kSlotDwords + 1));
     CHECK(!table_structured_buffer_high_word(heap, table, 3 * kSlotDwords));
+    using descriptor_host::table_typed_buffer_word;
+    CHECK(!table_typed_buffer_word(heap, table, kSlotDwords, false));
+    CHECK(table_typed_buffer_word(heap, table, 2 * kSlotDwords, false) == 0u);
+    CHECK(table_typed_buffer_word(heap, table, 2 * kSlotDwords, true) == 0u);
+    srv.Format = DXGI_FORMAT_R32_UINT;
+    srv.Buffer.StructureByteStride = 0;
+    std::memcpy(shader_words.data(), &srv, sizeof srv);
+    descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
+    CHECK(table_typed_buffer_word(heap, table, kSlotDwords, true) == 0x0004'0002u);
+    CHECK(table_typed_buffer_word(heap, table, kSlotDwords, false) == 0x1101'4204u);
+    srv.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(3, 4, 5, 0);
+    std::memcpy(shader_words.data(), &srv, sizeof srv);
+    descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
+    CHECK(table_typed_buffer_word(heap, table, kSlotDwords, false) == 0x1101'4841u);
+    CHECK(!table_typed_buffer_word(heap, table, kSlotDwords + 1, false));
     release(object);
 }
 
@@ -219,13 +234,19 @@ TEST(d3d12_xs_table_image_address_uses_the_title_base) {
     CHECK(descriptor_host::table_image_base_word(heap, heap.start, kSlotDwords) == 0x3456'789Au);
     CHECK(descriptor_host::table_image_base_word(heap, heap.start, 2 * kSlotDwords) == 0u);
     CHECK(!descriptor_host::table_image_base_word(heap, heap.start, 3 * kSlotDwords));
+    using descriptor_host::table_image_sampling_fields;
+    CHECK(table_image_sampling_fields(heap, heap.start, kSlotDwords) == 0x0040'0000u);
+    CHECK(table_image_sampling_fields(heap, heap.start, 2 * kSlotDwords) == 0u);
+    CHECK(!table_image_sampling_fields(heap, heap.start, 3 * kSlotDwords));
     ++words[10];
     descriptor::create_placed_srv(nullptr, resource_words.data(), words.data(), heap.start + step);
     CHECK(!descriptor_host::table_image_base_word(heap, heap.start, kSlotDwords));
+    CHECK(!table_image_sampling_fields(heap, heap.start, kSlotDwords));
     resource_words[0] = D3D12_RESOURCE_DIMENSION_BUFFER;
     --words[10];
     descriptor::create_placed_srv(nullptr, resource_words.data(), words.data(), heap.start + step);
     CHECK(!descriptor_host::table_image_base_word(heap, heap.start, kSlotDwords));
+    CHECK(!table_image_sampling_fields(heap, heap.start, kSlotDwords));
 
     const resource::HeapProperties properties{1, 0, 0, 1, 1};
     Object* image = nullptr;

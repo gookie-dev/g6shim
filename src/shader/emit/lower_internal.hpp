@@ -254,6 +254,7 @@ private:
     std::unordered_set<Value, ValueHash> read_phis_;
     std::unordered_map<Value, std::pair<std::size_t, std::uint32_t>, ValueHash> params_;
     std::unordered_map<Value, UserData, ValueHash> descriptor_addresses_;
+    std::unordered_map<Value, std::uint32_t, ValueHash> descriptor_zero_bits_;
     std::map<DescriptorMask, V> masked_descriptor_phis_;
     std::vector<std::tuple<Value, std::uint32_t, V>> pending_descriptor_phis_;
     std::optional<V> user_data_;

@@ -328,6 +328,11 @@ std::optional<std::uint32_t> State::descriptor_value(
     using Source = g6shim::shader::emit::UserData::Source;
     if (data.source == Source::ImageBaseAddressLow)
         return descriptor_host::table_image_base_word(*heap, root.value, data.dword);
+    if (data.source == Source::ImageSamplingFields)
+        return descriptor_host::table_image_sampling_fields(*heap, root.value, data.dword);
+    if (data.source == Source::TypedBufferFormatWord || data.source == Source::TypedBufferHighWord)
+        return descriptor_host::table_typed_buffer_word(
+            *heap, root.value, data.dword, data.source == Source::TypedBufferHighWord);
     if (data.source == Source::ShaderBufferComponentMapping)
         return descriptor_host::table_buffer_component_mapping(*heap, root.value, data.dword);
     if (data.source == Source::StructuredBufferHighWord)

@@ -2000,13 +2000,15 @@ std::size_t Lower::edge(std::size_t from, std::size_t to) {
 }
 
 bool Lower::has_partial_descriptor(Value value) const {
-    if (!descriptor_addresses_.contains(value) && !phi_at_.contains(value)) return false;
+    if (!descriptor_addresses_.contains(value) && !phi_at_.contains(value) && !descriptor_zero_bits_.contains(value))
+        return false;
     std::unordered_set<Value, ValueHash> visited;
     std::vector<Value> work{value};
     while (!work.empty()) {
         const Value v = work.back();
         work.pop_back();
         if (!visited.insert(v).second) continue;
+        if (descriptor_zero_bits_.contains(v)) return true;
         const auto field = descriptor_addresses_.find(v);
         if (field != descriptor_addresses_.end() && field->second.accepts_mask()) return true;
         const auto at = phi_at_.find(v);
@@ -2020,6 +2022,11 @@ bool Lower::has_partial_descriptor(Value value) const {
 
 V Lower::masked_descriptor_value(Value value, std::uint32_t mask) {
     constexpr Why unknown_bits = "a descriptor's address or format read as data";
+    const auto zero_bits = descriptor_zero_bits_.find(value);
+    if (zero_bits != descriptor_zero_bits_.end()) {
+        mask &= ~zero_bits->second;
+        if (mask == 0) return s_.m.i32(0);
+    }
     const auto field = descriptor_addresses_.find(value);
     if (field != descriptor_addresses_.end()) {
         using Source = UserData::Source;

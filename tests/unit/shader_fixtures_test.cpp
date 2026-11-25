@@ -39,6 +39,7 @@ constexpr std::string_view kScalarBufferAddress = "scalar_buffer_address";
 constexpr std::string_view kScalarBufferFields = "scalar_buffer_fields";
 constexpr std::string_view kScalarStructuredFields = "scalar_structured_fields";
 constexpr std::string_view kScalarRawHighWord = "scalar_raw_buffer_high_word";
+constexpr std::string_view kScalarTypedFormat = "scalar_typed_buffer_format";
 constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 
 const Fixture* find_fixture(std::string_view name) {
@@ -61,7 +62,8 @@ TEST(shader_fixtures_translate_and_validate) {
     for (const Fixture& fixture : kFixtures) {
         if (fixture.name == kScalarBufferLength || fixture.name == kScalarBufferAddress ||
             fixture.name == kScalarBufferFields || fixture.name == kScalarStructuredFields ||
-            fixture.name == kScalarRawHighWord || fixture.name == kScalarImageAddress)
+            fixture.name == kScalarRawHighWord || fixture.name == kScalarTypedFormat ||
+            fixture.name == kScalarImageAddress)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -166,7 +168,8 @@ TEST(shader_fixtures_translate_structured_buffer_stride_and_zero_test) {
     output.table_offset_dwords = kSecondDescriptorDword;
     const Lowered lowered = lower_fixture(*fixture, {input, output});
     using Source = UserData::Source;
-    for (const Source source : {Source::StructuredBufferHighWord, Source::StructuredBufferFormatWord}) {
+    for (const Source source : {Source::ShaderBufferAddressLow, Source::StructuredBufferHighWord,
+                                Source::StructuredBufferFormatWord}) {
         const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(),
                                         [source](const UserData& data) { return data.source == source; });
         CHECK(field != lowered.user_data.end());
@@ -201,6 +204,29 @@ TEST(shader_fixtures_translate_raw_buffer_high_word_with_vector_user) {
     check_dxil(lowered.dxil, fixture->name);
 }
 
+TEST(shader_fixtures_translate_the_typed_buffer_format_word) {
+    const Fixture* fixture = find_fixture(kScalarTypedFormat);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    UsedResource input = used_uav(kTableUserData, kTableSlot);
+    input.kind.kind = ResourceType::Kind::Srv;
+    input.stride = 4;
+    UsedResource output = used_uav(kTableUserData, kTableSlot);
+    output.table_offset_dwords = kSecondDescriptorDword;
+    const Lowered lowered = lower_fixture(*fixture, {input, output});
+    using Source = UserData::Source;
+    for (const Source source : {Source::TypedBufferHighWord, Source::TypedBufferFormatWord}) {
+        const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(),
+                                        [source](const UserData& data) { return data.source == source; });
+        CHECK(field != lowered.user_data.end());
+        if (field != lowered.user_data.end()) {
+            CHECK(field->slot == kTableSlot);
+            CHECK(field->dword == 0);
+        }
+    }
+    check_dxil(lowered.dxil, fixture->name);
+}
+
 TEST(shader_fixtures_translate_scalar_reads_of_image_addresses) {
     const Fixture* fixture = find_fixture(kScalarImageAddress);
     CHECK(fixture != nullptr);
@@ -220,5 +246,29 @@ TEST(shader_fixtures_translate_scalar_reads_of_image_addresses) {
         CHECK(address->slot == kTableSlot);
         CHECK(address->dword == 0);
     }
+    const auto sampling = std::find_if(lowered.user_data.begin(), lowered.user_data.end(), [](const UserData& entry) {
+        return entry.source == UserData::Source::ImageSamplingFields;
+    });
+    CHECK(sampling != lowered.user_data.end());
+    if (sampling != lowered.user_data.end()) {
+        CHECK(sampling->slot == kTableSlot);
+        CHECK(sampling->dword == 0);
+    }
     check_dxil(lowered.dxil, fixture->name);
+
+    Fixture unknown = *fixture;
+    constexpr std::uint32_t kPerformanceBit = 1u << UserData::kImageSamplingPerformanceShift;
+    constexpr std::uint32_t kCornerSampling = 1u << 23;
+    const auto mask = std::find(unknown.words.begin(), unknown.words.end(), kPerformanceBit);
+    CHECK(mask != unknown.words.end());
+    if (mask == unknown.words.end()) return;
+    *mask = kCornerSampling;
+    bool rejected = false;
+    try {
+        (void)lower_fixture(unknown, {input, output});
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("a descriptor's address or format read as data") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
 }

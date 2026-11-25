@@ -28,7 +28,9 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `scalar_raw_buffer_high_word.s` compares a byte-addressed buffer's upper address word with a threshold and converts the top format byte after a control-flow join.
 
-`scalar_image_address.s` uses the first slot for an image descriptor. It stores the shifted base-address word and the result of an image load in the output UAV.
+`scalar_typed_buffer_format.s` uses a formatted vector load and also reads that buffer's complete high address and format words as data.
+
+`scalar_image_address.s` uses the first slot for an image descriptor. It stores the shifted base address, the image load result, a sampling performance bit, a comparison of reserved bits and a compression metadata address bit. The negative case checks that corner sampling remains unavailable.
 
 ## Adding a program
 

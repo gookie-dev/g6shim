@@ -24,7 +24,8 @@ struct UserData {
     enum class Source : std::uint32_t {
         Root, ConstantBufferAddressLow, ShaderBufferAddressLow, ImageBaseAddressLow,
         ShaderBufferAddressHigh, ShaderBufferComponentMapping, StructuredBufferHighWord,
-        LinearRawBufferHighWord, LinearRawBufferFormatWord, StructuredBufferFormatWord
+        LinearRawBufferHighWord, LinearRawBufferFormatWord, StructuredBufferFormatWord,
+        ImageSamplingFields, TypedBufferFormatWord, TypedBufferHighWord
     };
 
     std::uint32_t index = 0;
@@ -37,12 +38,16 @@ struct UserData {
     static constexpr std::uint32_t kBufferComponentMappingMask = 0xfff;
     static constexpr std::uint32_t kBufferStrideShift = 16;
     static constexpr std::uint32_t kBufferStrideMask = 0x3fff;
+    static constexpr std::uint32_t kImageSamplingPerformanceShift = 20;
+    static constexpr std::uint32_t kImageSamplingPerformanceMask = 0x7u << kImageSamplingPerformanceShift;
+    static constexpr std::uint32_t kImageLodWarningMask = 0xfffu << 8;
     static constexpr std::uint32_t kStructuredBufferHighMask =
         (kBufferStrideMask << kBufferStrideShift) | kBufferAddressHighMask;
 
     constexpr std::uint32_t known_bits() const {
         if (source == Source::ShaderBufferAddressHigh) return kBufferAddressHighMask;
         if (source == Source::ShaderBufferComponentMapping) return kBufferComponentMappingMask;
+        if (source == Source::ImageSamplingFields) return kImageSamplingPerformanceMask | kImageLodWarningMask;
         return UINT32_MAX;
     }
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdlib>
 #include <cstdint>
@@ -19,6 +20,7 @@ namespace {
 constexpr std::uint64_t kCodeCbvSize = 0x1'0000;
 constexpr std::pair<std::uint32_t, std::uint32_t> kRawBufferSrv{11, 0};
 constexpr std::uint32_t kResourceDescriptorBytes = 32;
+constexpr std::uint32_t kImageWord5ReservedMask = 0xff00'0000;
 constexpr Why kDescriptorData = "a descriptor's address or format read as data";
 
 std::optional<std::uint32_t> operand_constant(const Operand& value) {
@@ -79,12 +81,21 @@ void Lower::sop(const IrInst& inst) {
     };
     if (name == "s_mov_b32" && lo && src.size() == 1) {
         const auto value = scalar_value(src[0]);
-        const auto field = value ? descriptor_addresses_.find(*value) : descriptor_addresses_.end();
-        if (field != descriptor_addresses_.end() && field->second.accepts_mask()) {
-            const UserData data = field->second;
-            descriptor_addresses_[*lo] = data;
-            if (data.known_bits() != UINT32_MAX) vals_[*lo] = Val::missing(kDescriptorData);
-            return;
+        if (value) {
+            const auto zero_bits = descriptor_zero_bits_.find(*value);
+            const auto field = descriptor_addresses_.find(*value);
+            if (field != descriptor_addresses_.end() && field->second.accepts_mask()) {
+                const UserData data = field->second;
+                descriptor_addresses_[*lo] = data;
+                if (data.known_bits() != UINT32_MAX) vals_[*lo] = Val::missing(kDescriptorData);
+                if (zero_bits != descriptor_zero_bits_.end()) descriptor_zero_bits_[*lo] = zero_bits->second;
+                return;
+            }
+            if (zero_bits != descriptor_zero_bits_.end()) {
+                descriptor_zero_bits_[*lo] = zero_bits->second;
+                vals_[*lo] = Val::missing(kDescriptorData);
+                return;
+            }
         }
     }
     const std::size_t c = cur_;
@@ -185,8 +196,12 @@ void Lower::sop(const IrInst& inst) {
             if (cmp_op.ends_with("64")) fail("a 64-bit scalar compare");
             const bool zero_test = cmp_op == "eq_u32" || cmp_op == "lg_u32";
             const auto compared_mask = [&](std::size_t index) -> std::optional<std::uint32_t> {
-                if (zero_test && src.size() == 2 && operand_constant(src[1 - index]) == 0u)
-                    return UserData::kStructuredBufferHighMask;
+                if (src.size() != 2) return std::nullopt;
+                const auto constant = operand_constant(src[1 - index]);
+                if (zero_test && constant == 0u) return UserData::kStructuredBufferHighMask;
+                if (index == 0 && (cmp_op == "lt_u32" || cmp_op == "ge_u32") && constant &&
+                    std::has_single_bit(*constant))
+                    return ~(*constant - 1u);
                 return std::nullopt;
             };
             a = src32(0, compared_mask(0));
@@ -662,7 +677,8 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
         }
         return;
     }
-    if (const auto* image_fields = std::get_if<ImageFields>(&ui.fields)) {
+    const auto* image_fields = std::get_if<ImageFields>(&ui.fields);
+    if (image_fields != nullptr) {
         const std::uint8_t dim = image_fields->dim;
         std::uint32_t kind = 0;
         if (dim == 0) kind = 1;
@@ -696,8 +712,16 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
                                 !buffer_fields->format;
     const bool linear_raw = used != nullptr && used->kind.kind == ResourceType::Kind::Srv && used->stride <= 1 &&
                             props == kRawBufferSrv && (scalar_srv || byte_addressed);
-    const bool structured = scalar_srv && used->stride >= 4 && used->stride % 4 == 0 &&
+    const bool structured = used != nullptr && used->kind.kind == ResourceType::Kind::Srv &&
+                            (scalar_srv || props.first == 12) && used->stride >= 4 && used->stride % 4 == 0 &&
                             used->stride <= UserData::kBufferStrideMask;
+    const bool typed = used != nullptr && used->kind.kind == ResourceType::Kind::Srv && props.first == 10;
+    const auto tracked = scalar_.find(src.load);
+    const RootType::Kind root = tracked != scalar_.end() && tracked->second.param < x_->native->layout.size()
+                                   ? x_->native->layout[tracked->second.param].root.kind
+                                   : RootType::Kind::Other;
+    const bool image_has_no_metadata_plane = image_fields != nullptr && !image_fields->r128 && !uav &&
+                                             (root == RootType::Kind::Table || root == RootType::Kind::ResourceHeap);
     const V h = handle(site, src, false, props);
     const std::size_t c = cur_;
     const Ty i32t = s_.t.i32;
@@ -752,6 +776,10 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
     }
     for (std::uint32_t k = 0; k < count; ++k) {
         const std::uint32_t rel = k - static_cast<std::uint32_t>(first);
+        if (rel == 7 && image_has_no_metadata_plane) {
+            write(inst, Reg::s(static_cast<std::uint8_t>(code + k)), s_.m.i32(0), std::nullopt);
+            continue;
+        }
         const auto found = std::find_if(words.begin(), words.end(),
                                         [rel](const auto& word) { return word.first == rel; });
         if (found != words.end()) {
@@ -759,11 +787,17 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
         } else {
             const auto v = inst.write(Reg::s(static_cast<std::uint8_t>(code + k)));
             if (!v) continue;
-            if (rel == 0 && scalar_srv && defer_descriptor_address(*v, src, *used, UserData::Source::ShaderBufferAddressLow))
+            if (rel == 0 && (scalar_srv || linear_raw || structured || typed) &&
+                defer_descriptor_address(*v, src, *used, SourceKind::ShaderBufferAddressLow))
                 continue;
             if (rel == 0 && image && used != nullptr &&
                 defer_descriptor_address(*v, src, *used, UserData::Source::ImageBaseAddressLow))
                 continue;
+            if (rel == 5 && image_fields != nullptr && !image_fields->r128) {
+                descriptor_zero_bits_[*v] = kImageWord5ReservedMask;
+                if (!uav && image_fields->dim == 1 && used != nullptr && used->kind.kind == ResourceType::Kind::Srv)
+                    defer_descriptor_address(*v, src, *used, SourceKind::ImageSamplingFields);
+            }
             if (linear_raw || structured) {
                 if (rel == 1 && defer_descriptor_address(*v, src, *used, structured ? SourceKind::StructuredBufferHighWord
                                                                                   : SourceKind::LinearRawBufferHighWord))
@@ -776,6 +810,9 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
                 defer_descriptor_address(*v, src, *used, SourceKind::ShaderBufferAddressHigh);
             if (scalar_srv && rel == 3)
                 defer_descriptor_address(*v, src, *used, SourceKind::ShaderBufferComponentMapping);
+            if (typed && (rel == 1 || rel == 3) && defer_descriptor_address(
+                    *v, src, *used, rel == 1 ? SourceKind::TypedBufferHighWord : SourceKind::TypedBufferFormatWord))
+                continue;
             vals_[*v] = Val::missing(kDescriptorData);
         }
     }
