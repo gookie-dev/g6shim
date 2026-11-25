@@ -55,6 +55,14 @@ void register_range(std::uint64_t start, std::uint64_t bytes, std::uint64_t step
     g_ranges.push_back(GpuRange{start, bytes, step, sampler});
 }
 
+using ImageData = g6shim::shader::emit::ImageHeapData;
+
+struct ImageHeap {
+    ImageHeapBinding binding;
+    std::uint8_t* data;
+    std::uint32_t count;
+};
+
 struct HeapEntry {
     std::uint64_t start = 0;
     std::uint64_t end = 0;
@@ -64,6 +72,7 @@ struct HeapEntry {
     bool sampler = false;
     bool tried = false;
     std::unique_ptr<HostHeap> host;
+    std::optional<ImageHeap> image_data;
     std::vector<std::uint32_t> pending;
     std::mutex mutex;
 };
@@ -956,23 +965,22 @@ std::optional<std::uint32_t> table_image_base_word(const descriptor::Heap& heap,
     return static_cast<std::uint32_t>(*address >> kImageBaseAddressShift);
 }
 
-std::optional<ImageShapeWords> table_image_shape(const descriptor::Heap& heap, std::uint64_t table,
-                                                 std::uint32_t dword) {
-    const auto view = table_view(heap, table, dword);
-    if (!view) return std::nullopt;
-    const auto desc = shader_view_desc(*view);
+namespace {
+
+std::optional<ImageShapeWords> image_shape(const descriptor::View& view) {
+    const auto desc = shader_view_desc(view);
     if (!desc || (desc->ViewDimension != D3D12_SRV_DIMENSION_TEXTURE2D &&
                   desc->ViewDimension != D3D12_SRV_DIMENSION_TEXTURE2DARRAY))
         return std::nullopt;
 
     resource::ResourceDesc resource_desc{};
-    if (const auto* placed = std::get_if<descriptor::PlacedView>(&*view)) {
+    if (const auto* placed = std::get_if<descriptor::PlacedView>(&view)) {
         constexpr std::uint64_t kAlignment = 1ull << kImageBaseAddressShift;
         const std::uint64_t address = placed_address(*placed);
         if (address == 0 || address % kAlignment != 0) return std::nullopt;
         std::memcpy(&resource_desc, placed->resource.data(), sizeof resource_desc);
     } else {
-        const auto* srv = std::get_if<descriptor::ShaderView>(&*view);
+        const auto* srv = std::get_if<descriptor::ShaderView>(&view);
         if (srv == nullptr) return std::nullopt;
         if (srv->resource == 0) return ImageShapeWords{};
         const auto memory = resource::texture_memory(reinterpret_cast<Object*>(srv->resource));
@@ -997,6 +1005,28 @@ std::optional<ImageShapeWords> table_image_shape(const descriptor::Heap& heap, s
     return ImageShapeWords{width << UserData::kImageWidthLowShift,
                            (width >> kWidthLowBits) | (height << UserData::kImageWidthHighBits),
                            base_mip << UserData::kImageBaseMipShift};
+}
+
+void write_image_slot(const ImageHeap& heap, std::uint32_t index, const std::optional<descriptor::View>& view) {
+    if (index >= heap.count) return;
+    ImageData::Record record{};
+    if (view) {
+        if (const auto shape = image_shape(*view)) {
+            record[ImageData::kWidthLow] = shape->width_low;
+            record[ImageData::kDimensions] = shape->dimensions;
+            record[ImageData::kBaseMip] = shape->base_mip;
+            record[ImageData::kPresent] = 1;
+        }
+    }
+    std::memcpy(heap.data + static_cast<std::size_t>(index) * ImageData::kBytes, record.data(), ImageData::kBytes);
+}
+
+}  // namespace
+
+std::optional<ImageShapeWords> table_image_shape(const descriptor::Heap& heap, std::uint64_t table,
+                                                 std::uint32_t dword) {
+    const auto view = table_view(heap, table, dword);
+    return view ? image_shape(*view) : std::nullopt;
 }
 
 std::optional<std::uint32_t> table_image_sampling_fields(const descriptor::Heap& heap, std::uint64_t table,
@@ -1122,7 +1152,8 @@ void mirror(std::uint64_t handle) {
         if (!entry->tried) entry->pending.push_back(index);
         return;
     }
-    entry->host->mirror(index, handle, false);
+    const auto view = entry->host->mirror(index, handle, false);
+    if (entry->image_data) write_image_slot(*entry->image_data, index, view);
 }
 
 void release_dynamic(Object* heap, std::uint32_t first, std::uint32_t count) {
@@ -1146,6 +1177,38 @@ HostHeap* for_heap(Object* heap) {
     for (const std::uint32_t index : pending)
         entry->host->mirror(index, entry->start + static_cast<std::uint64_t>(index) * entry->step, false);
     return entry->host.get();
+}
+
+std::optional<ImageHeapBinding> image_heap_data(Object* heap) {
+    const auto entry = entry_for_heap(heap);
+    if (!entry || entry->sampler) return std::nullopt;
+    std::lock_guard<std::mutex> lock(entry->mutex);
+    if (entry->image_data) return entry->image_data->binding;
+    host::Host* gpu = host::host();
+    if (!entry->host || gpu == nullptr) return std::nullopt;
+    const std::uint32_t count = std::min({entry->count, entry->host->count(), kPortableViews});
+    if (count == 0) return std::nullopt;
+    const auto reserved = entry->host->dynamic(1);
+    if (!reserved) return std::nullopt;
+    auto upload = gpu->upload_buffer(static_cast<std::uint64_t>(count) * ImageData::kBytes);
+    if (!upload) {
+        entry->host->release(*reserved, 1);
+        return std::nullopt;
+    }
+    ImageHeap data{{*reserved, std::move(upload->first)}, upload->second, count};
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const std::uint64_t handle = entry->start + static_cast<std::uint64_t>(index) * entry->step;
+        write_image_slot(data, index, descriptor::view(handle));
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
+    desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    desc.Buffer.NumElements = count * ImageData::kWords;
+    desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+    gpu->device()->CreateShaderResourceView(data.binding.resource.Get(), &desc, entry->host->cpu(*reserved));
+    entry->image_data = std::move(data);
+    return entry->image_data->binding;
 }
 
 }  // namespace g6shim::d3d12_xs::descriptor_host

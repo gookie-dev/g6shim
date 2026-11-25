@@ -84,7 +84,8 @@ private:
     std::uint32_t user_value(bool compute, std::uint8_t slot, g6shim::shader::RootType root,
                              std::uint32_t dword) const;
     const descriptor::Heap* heap_of(std::uint64_t handle) const;
-    std::optional<std::uint32_t> descriptor_value(bool compute, const g6shim::shader::emit::UserData& data) const;
+    std::optional<std::uint32_t> descriptor_value(host::HostList& list, bool compute,
+                                                   const g6shim::shader::emit::UserData& data) const;
     bool rectangles(host::HostList& list, std::uint32_t count, std::uint32_t first);
     void table_entry(host::HostList& list, const g6shim::shader::UsedResource& used, bool compute);
     std::vector<std::pair<std::uint8_t, std::uint32_t>> tables(host::HostList& list,

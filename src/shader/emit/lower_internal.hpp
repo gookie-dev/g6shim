@@ -102,6 +102,20 @@ public:
     std::vector<UserData> user_reads() const;
 
 private:
+    struct ImageHeapRead {
+        std::size_t block;
+        std::size_t next;
+        V byte_address;
+        UserData binding;
+        std::optional<V> shape;
+    };
+
+    struct ImageHeapWord {
+        std::size_t read;
+        std::uint32_t channel;
+        std::uint32_t known_bits;
+    };
+
     V code_dword(V byte);
     void flat(const IrInst& inst, std::size_t b, std::size_t i);
     void find_sections();
@@ -191,6 +205,8 @@ private:
     Val descriptor_address(UserData data);
     bool has_partial_descriptor(Value value) const;
     V masked_descriptor_value(Value value, std::uint32_t mask);
+    void defer_image_heap_read(const IrInst& inst, Site site, std::uint8_t code, const RootParam& root);
+    V read_image_heap_word(const ImageHeapWord& word);
     void fill_masked_descriptor_phis();
     Val user_dword(std::uint32_t index);
     void code_smem(const IrInst& inst, Address a);
@@ -201,6 +217,7 @@ private:
     V handle(Site site, const Source& src, bool sampler, std::pair<std::uint32_t, std::uint32_t> props);
     V lane_heap_index(const Source& src, bool sampler);
     V fetched_index(Site load, std::uint8_t first, bool sampler);
+    V heap_byte_address(Site load, std::uint8_t first);
     V heap_index(Site load, std::uint8_t first, bool sampler);
     void valu(const IrInst& inst, std::size_t b, std::size_t i);
     std::pair<V, std::optional<V>> dpp(const IrInst& inst, const Dpp& dpp);
@@ -255,6 +272,9 @@ private:
     std::unordered_set<Value, ValueHash> read_phis_;
     std::unordered_map<Value, std::pair<std::size_t, std::uint32_t>, ValueHash> params_;
     std::unordered_map<Value, UserData, ValueHash> descriptor_addresses_;
+    std::vector<ImageHeapRead> image_heap_reads_;
+    std::unordered_map<Value, ImageHeapWord, ValueHash> image_heap_words_;
+    std::optional<bool> image_heap_allowed_;
     std::unordered_map<Value, std::uint32_t, ValueHash> descriptor_zero_bits_;
     std::map<DescriptorMask, V> masked_descriptor_phis_;
     std::vector<std::tuple<Value, std::uint32_t, V>> pending_descriptor_phis_;

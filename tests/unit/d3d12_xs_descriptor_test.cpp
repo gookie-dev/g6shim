@@ -7,6 +7,8 @@
 #include "d3d12_xs/object.hpp"
 #include "d3d12_xs/resource.hpp"
 
+#include <g6shim/shader/emit/emit.hpp>
+
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -302,6 +304,71 @@ TEST(d3d12_xs_table_image_address_uses_the_title_base) {
             CHECK(table_image_shape(heap, heap.start, 0) == kShape);
         }
         release(image);
+    }
+    release(object);
+}
+
+TEST(d3d12_xs_indexed_image_shape_follows_view_writes_and_copies) {
+    if (host::host() == nullptr) return;
+    const descriptor::HeapDesc desc{descriptor::kViewsKind, 3, descriptor::kShaderVisible, 0};
+    const descriptor::Placement none{0, 0};
+    Object* object = nullptr;
+    CHECK(create_heap_with(desc, none, &object) == S_OK);
+    if (object == nullptr) return;
+    const auto& heap = *static_cast<descriptor::Heap*>(object);
+    const auto step = descriptor::increment_size(nullptr, desc.kind);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MostDetailedMip = 2;
+    srv.Texture2D.MipLevels = 1;
+    std::array<std::uint32_t, 16> words{};
+    std::memcpy(words.data(), &srv, sizeof srv);
+    words[10] = 0x1000;
+    resource::ResourceDesc texture{};
+    texture.dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texture.width = 32;
+    texture.height = 64;
+    texture.depth_or_array_size = 1;
+    texture.mip_levels = 4;
+    texture.format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texture.sample_count = 1;
+    std::array<std::uint32_t, 14> resource_words{};
+    std::memcpy(resource_words.data(), &texture, sizeof texture);
+    descriptor::create_placed_srv(nullptr, resource_words.data(), words.data(), heap.start);
+    const auto* host_heap = descriptor_host::for_heap(object);
+    const auto binding = descriptor_host::image_heap_data(object);
+    CHECK(host_heap != nullptr);
+    CHECK(binding.has_value());
+    if (binding && host_heap != nullptr) {
+        CHECK(binding->index >= host_heap->count());
+        using Data = g6shim::shader::emit::ImageHeapData;
+        const D3D12_RANGE read_range{0, desc.count * Data::kBytes};
+        void* mapped = nullptr;
+        CHECK(binding->resource->Map(0, &read_range, &mapped) == S_OK);
+        if (mapped != nullptr) {
+            const auto record = [mapped](std::size_t slot) {
+                Data::Record result{};
+                std::memcpy(result.data(), static_cast<const std::uint8_t*>(mapped) + slot * Data::kBytes,
+                            Data::kBytes);
+                return result;
+            };
+            constexpr Data::Record kShape{0xC000'0000u, 0x000F'C007u, 0x2000u, 1};
+            CHECK(record(0) == kShape);
+            CHECK(record(1) == Data::Record{});
+            descriptor::copy_simple(nullptr, 1, heap.start + step, heap.start, desc.kind);
+            CHECK(record(1) == kShape);
+            descriptor::create_srv(nullptr, nullptr, words.data(), heap.start);
+            constexpr Data::Record kNullImage{0, 0, 0, 1};
+            CHECK(record(0) == kNullImage);
+            constexpr std::array kConstant{0x1000u, 0u, 256u, 0u};
+            descriptor::create_cbv(nullptr, kConstant.data(), heap.start + step);
+            CHECK(record(1) == Data::Record{});
+            CHECK(descriptor_host::image_heap_data(object)->index == binding->index);
+            const D3D12_RANGE no_write{0, 0};
+            binding->resource->Unmap(0, &no_write);
+        }
     }
     release(object);
 }

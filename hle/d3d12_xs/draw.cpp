@@ -318,8 +318,15 @@ const descriptor::Heap* State::heap_of(std::uint64_t handle) const {
 }
 
 std::optional<std::uint32_t> State::descriptor_value(
-    bool compute, const g6shim::shader::emit::UserData& data) const {
+    host::HostList& list, bool compute, const g6shim::shader::emit::UserData& data) const {
     using Source = g6shim::shader::emit::UserData::Source;
+    if (data.source == Source::ImageHeapData) {
+        if (heaps_[0] == nullptr) return std::nullopt;
+        const auto binding = descriptor_host::image_heap_data(heaps_[0]);
+        if (!binding) return std::nullopt;
+        list.keep(binding->resource.Get());
+        return binding->index;
+    }
     if (data.source == Source::SamplerLodWord) {
         const auto* heap = static_cast<const descriptor::Heap*>(heaps_[1]);
         if (heap == nullptr) return std::nullopt;
@@ -463,7 +470,7 @@ bool State::bind(host::HostList& list, const pipeline_host::HostPipeline& pipeli
             values.resize(stage.user_data->second);
             for (const auto& data : translated->host.user_data) {
                 if (data.source == Source::Root) continue;
-                const auto value = descriptor_value(compute, data);
+                const auto value = descriptor_value(list, compute, data);
                 if (!value || data.index >= values.size()) {
                     static std::once_flag once;
                     std::call_once(once, [] {

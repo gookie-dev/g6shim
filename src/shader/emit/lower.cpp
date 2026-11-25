@@ -665,6 +665,9 @@ Lowered Lower::run() {
     }
     fill_phis();
     fill_mask_words();
+    for (const ImageHeapRead& read : image_heap_reads_) {
+        if (!read.shape) s_.m.terminate(read.block, Term::br(read.next));
+    }
     s_.samplers = static_cast<std::uint32_t>(samplers_.size());
     if (s_.geometry) {
         std::uint32_t scalars = 1;
@@ -2007,7 +2010,8 @@ std::size_t Lower::edge(std::size_t from, std::size_t to) {
 }
 
 bool Lower::has_partial_descriptor(Value value) const {
-    if (!descriptor_addresses_.contains(value) && !phi_at_.contains(value) && !descriptor_zero_bits_.contains(value))
+    if (!descriptor_addresses_.contains(value) && !phi_at_.contains(value) && !descriptor_zero_bits_.contains(value) &&
+        !image_heap_words_.contains(value))
         return false;
     std::unordered_set<Value, ValueHash> visited;
     std::vector<Value> work{value};
@@ -2015,7 +2019,7 @@ bool Lower::has_partial_descriptor(Value value) const {
         const Value v = work.back();
         work.pop_back();
         if (!visited.insert(v).second) continue;
-        if (descriptor_zero_bits_.contains(v)) return true;
+        if (descriptor_zero_bits_.contains(v) || image_heap_words_.contains(v)) return true;
         const auto field = descriptor_addresses_.find(v);
         if (field != descriptor_addresses_.end() && field->second.accepts_mask()) return true;
         const auto at = phi_at_.find(v);
@@ -2033,6 +2037,10 @@ V Lower::masked_descriptor_value(Value value, std::uint32_t mask) {
     if (zero_bits != descriptor_zero_bits_.end()) {
         mask &= ~zero_bits->second;
         if (mask == 0) return s_.m.i32(0);
+    }
+    if (const auto field = image_heap_words_.find(value); field != image_heap_words_.end()) {
+        if ((mask & ~field->second.known_bits) != 0) fail(unknown_bits);
+        return read_image_heap_word(field->second);
     }
     const auto field = descriptor_addresses_.find(value);
     if (field != descriptor_addresses_.end()) {

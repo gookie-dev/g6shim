@@ -45,6 +45,7 @@ constexpr std::string_view kScalarTypedFormat = "scalar_typed_buffer_format";
 constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 constexpr std::string_view kImageSampleBiasA16 = "image_sample_bias_a16";
 constexpr std::string_view kImageShapeOnly = "image_shape_only";
+constexpr std::string_view kImageHeapShape = "image_heap_shape";
 constexpr std::string_view kSamplerLodData = "sampler_lod_data";
 constexpr std::string_view kPackedInputPartner = "packed_input_partner";
 constexpr std::string_view kSelectReadLaneMask = "select_readlane_mask";
@@ -73,7 +74,7 @@ TEST(shader_fixtures_translate_and_validate) {
             fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords ||
             fixture.name == kImageSampleBiasA16 || fixture.name == kScalarBufferCountOnly ||
             fixture.name == kPackedInputPartner || fixture.name == kSelectReadLaneMask ||
-            fixture.name == kImageShapeOnly || fixture.name == kSamplerLodData)
+            fixture.name == kImageShapeOnly || fixture.name == kImageHeapShape || fixture.name == kSamplerLodData)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -295,6 +296,65 @@ TEST(shader_fixtures_translate_sampler_lod_data) {
         check_dxil(lowered.dxil, fixture->name);
     } catch (const std::exception& error) {
         std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
+    }
+}
+
+TEST(shader_fixtures_translate_image_shape_at_a_computed_heap_index) {
+    const Fixture* fixture = find_fixture(kImageHeapShape);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    constexpr std::uint8_t kHeapUserData = 4;
+    constexpr std::uint8_t kHeapSlot = 2;
+    constexpr std::uint8_t kOutputUserData = 6;
+    constexpr std::uint8_t kOutputSlot = 1;
+    const auto translate = [&](const Fixture& code) {
+        return lower_compute(code.words, kFixtureVgprs,
+            {root_param(RootType::Kind::Constants, kConstantsUserData, kConstantsSlot),
+             root_param(RootType::Kind::ResourceHeap, kHeapUserData, kHeapSlot),
+             root_param(RootType::Kind::Table, kOutputUserData, kOutputSlot)},
+            {used_uav(kOutputUserData, kOutputSlot)}, (kOutputUserData + 1u) << kUserSgprShift, {1, 1, 1});
+    };
+    try {
+        const auto lowered = translate(*fixture);
+        const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(), [](const UserData& entry) {
+            return entry.source == UserData::Source::ImageHeapData;
+        });
+        CHECK(field != lowered.user_data.end());
+        if (field != lowered.user_data.end()) {
+            CHECK(field->root.kind == RootType::Kind::ResourceHeap);
+            CHECK(field->slot == kHeapSlot);
+        }
+        check_dxil(lowered.dxil, fixture->name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
+    }
+
+    Fixture unknown = *fixture;
+    const auto align = std::find(unknown.words.begin(), unknown.words.end(), 0x0278'120Eu);
+    CHECK(align != unknown.words.end());
+    if (align == unknown.words.end()) return;
+    *align += 1u << 18;
+    bool rejected = false;
+    try {
+        (void)translate(unknown);
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("a descriptor's address or format read as data") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
+
+    Fixture unused = *fixture;
+    unused.words.erase(unused.words.begin() + 4, unused.words.end() - 1);
+    try {
+        const auto lowered = translate(unused);
+        CHECK(std::none_of(lowered.user_data.begin(), lowered.user_data.end(), [](const UserData& entry) {
+            return entry.source == UserData::Source::ImageHeapData;
+        }));
+        check_dxil(lowered.dxil, unused.name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s with an unused load did not translate: %s\n", unused.name, error.what());
         CHECK(false);
     }
 }

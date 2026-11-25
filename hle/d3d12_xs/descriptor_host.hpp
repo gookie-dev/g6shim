@@ -105,6 +105,12 @@ struct ImageShapeWords {
 
 std::optional<ImageShapeWords> table_image_shape(const descriptor::Heap& heap, std::uint64_t table,
                                                  std::uint32_t dword);
+struct ImageHeapBinding {
+    std::uint32_t index;
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+};
+
+std::optional<ImageHeapBinding> image_heap_data(Object* heap);
 std::optional<std::uint32_t> sampler_lod_word(const descriptor::Heap& heap, std::uint32_t dword);
 std::optional<std::uint32_t> table_image_sampling_fields(const descriptor::Heap& heap, std::uint64_t table,
                                                         std::uint32_t dword);

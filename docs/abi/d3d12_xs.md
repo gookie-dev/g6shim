@@ -97,6 +97,8 @@ Image base-address words in fixed table slots use the same binding path. The sou
 
 Fixed shader-resource views of two-dimensional textures expose width minus one across words 1 and 2 and height minus one in word 2. These fields use the underlying mip-zero dimensions, including views that start at a later mip. Bits 12 through 15 of word 3 hold the view's starting mip. The translator accepts masks that use only these verified fields.
 
+An eight-word scalar image read through the resource heap can fetch the same fields from a bounded raw buffer with one record per heap slot. Descriptor creation and copies update the record. A slot outside the buffer or a view without those fields ends the affected shader invocation. Compute shaders with group barriers keep the translation failure for this read.
+
 An ordinary sampler descriptor exposes its LOD word at a fixed sampler heap slot. Its minimum and maximum are clamped and truncated to unsigned 4.8 fields, and the upper byte is zero. This layout was observed in synthetic SDK-created samplers on devices `1002:744C` and `1002:13C0`. Extended sampler descriptors require a separate encoding for their tuning fields.
 
 Word 5 of the eight-word image descriptor has reserved zero bits at 31:24. Checked two-dimensional shader-resource views use value 4 for the sampling performance field at bits 22:20 and zero for the LOD-warning field at bits 19:8, as observed in synthetic SDK-created views across color formats, mip clamps and resource flags. An unbound view supplies zero.

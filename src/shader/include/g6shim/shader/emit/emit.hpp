@@ -27,7 +27,7 @@ struct UserData {
         LinearRawBufferHighWord, LinearRawBufferFormatWord, StructuredBufferFormatWord,
         ImageSamplingFields, TypedBufferFormatWord, TypedBufferHighWord,
         ConstantBufferHighWord, ConstantBufferRecordCount, ConstantBufferFormatWord,
-        ShaderBufferRecordCount, ImageWidthLowBits, ImageDimensions, SamplerLodWord, ImageBaseMip
+        ShaderBufferRecordCount, ImageWidthLowBits, ImageDimensions, SamplerLodWord, ImageBaseMip, ImageHeapData
     };
 
     std::uint32_t index = 0;
@@ -68,6 +68,16 @@ struct UserData {
     }
 
     friend bool operator==(const UserData&, const UserData&) = default;
+};
+
+struct ImageHeapData {
+    static constexpr std::uint32_t kWidthLow = 0;
+    static constexpr std::uint32_t kDimensions = 1;
+    static constexpr std::uint32_t kBaseMip = 2;
+    static constexpr std::uint32_t kPresent = 3;
+    static constexpr std::uint32_t kWords = 4;
+    static constexpr std::uint32_t kBytes = kWords * sizeof(std::uint32_t);
+    using Record = std::array<std::uint32_t, kWords>;
 };
 
 struct HostShader {

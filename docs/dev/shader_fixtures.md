@@ -40,6 +40,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `image_shape_only.s` reads the split width bits and starting mip of an image descriptor without using it in an image instruction. It also joins the two masked width words with a constant bit alignment. The negative cases ask for an unavailable bit or use a variable alignment that needs both full words.
 
+`image_heap_shape.s` reads the split width and starting mip through an index computed from a root constant. A scalar move preserves which bits can be read from the selected view. The fixture rejects a shift that needs an unavailable bit and omits the metadata binding when the result is unused.
+
 `sampler_lod_data.s` reads and compares the LOD word of the second sampler heap slot without sampling an image.
 
 `packed_input_partner.s` interpolates the high half of the third packed component. Its two half-precision signature rows share one hardware attribute. The cases cover an adjacent partner, a unique partner beyond a separate input, and rejection when no eligible partner exists.

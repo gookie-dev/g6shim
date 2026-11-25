@@ -89,6 +89,12 @@ void Lower::sop(const IrInst& inst) {
     if (name == "s_mov_b32" && lo && src.size() == 1) {
         const auto value = scalar_value(src[0]);
         if (value) {
+            const auto indexed = image_heap_words_.find(*value);
+            if (indexed != image_heap_words_.end()) {
+                image_heap_words_[*lo] = indexed->second;
+                vals_[*lo] = Val::missing(kDescriptorData);
+                return;
+            }
             const auto zero_bits = descriptor_zero_bits_.find(*value);
             const auto field = descriptor_addresses_.find(*value);
             if (field != descriptor_addresses_.end() && field->second.accepts_mask()) {
@@ -844,11 +850,17 @@ void Lower::standalone_descriptor_data(const IrInst& inst, Site site, std::uint8
     constexpr std::uint32_t kSlotDwords = kResourceDescriptorBytes / kDwordBytes;
     constexpr std::uint32_t kSamplerSlotDwords = kSamplerDescriptorBytes / kDwordBytes;
     const auto tracked = scalar_.find(site);
-    if (tracked == scalar_.end() || tracked->second.dynamic ||
+    if (tracked == scalar_.end() ||
         tracked->second.param >= x_->native->layout.size() || tracked->second.offset % kDwordBytes != 0)
         fail(kStandaloneDescriptorData);
     const Address& address = tracked->second;
     const RootParam& root = x_->native->layout[address.param];
+    if (root.root.kind == RootType::Kind::ResourceHeap && count == kSlotDwords &&
+        address.offset % kResourceDescriptorBytes == 0) {
+        defer_image_heap_read(inst, site, code, root);
+        return;
+    }
+    if (address.dynamic) fail(kStandaloneDescriptorData);
     const bool sampler = root.root.kind == RootType::Kind::SamplerHeap;
     const std::uint32_t dword = address.offset / kDwordBytes;
     const std::uint32_t first = dword % kSlotDwords;
@@ -884,6 +896,73 @@ void Lower::standalone_descriptor_data(const IrInst& inst, Site site, std::uint8
             vals_[*value] = Val::missing(kStandaloneDescriptorData);
         }
     }
+}
+
+void Lower::defer_image_heap_read(const IrInst& inst, Site site, std::uint8_t code, const RootParam& root) {
+    if (!image_heap_allowed_) {
+        const HwStage stage = x_->native->stage;
+        image_heap_allowed_ = stage == HwStage::Ps || stage == HwStage::Vs || stage == HwStage::Cs;
+        if (stage == HwStage::Cs) {
+            for (const IrBlock& block : x_->p->blocks) {
+                for (const IrInst& candidate : block.insts)
+                    if (candidate.name() == "s_barrier") image_heap_allowed_ = false;
+            }
+        }
+    }
+    if (!*image_heap_allowed_) fail(kStandaloneDescriptorData);
+    const V byte_address = heap_byte_address(site, 0);
+    const std::size_t read_index = image_heap_reads_.size();
+    const std::size_t read = s_.m.new_block();
+    const std::size_t next = s_.m.new_block();
+    const UserData binding{0, root.slot, root.root, 0, UserData::Source::ImageHeapData};
+    image_heap_reads_.push_back({read, next, byte_address, binding, std::nullopt});
+    s_.m.terminate(cur_, Term::br(read));
+    cur_ = next;
+    using Data = ImageHeapData;
+    constexpr std::array masks{UINT32_MAX << UserData::kImageWidthLowShift, UserData::kImageDimensionsMask,
+                               UserData::kImageBaseMipMask};
+    for (std::uint32_t k = 0; k < kResourceDescriptorBytes / sizeof(std::uint32_t); ++k) {
+        const auto value = inst.write(Reg::s(static_cast<std::uint8_t>(code + k)));
+        if (!value) continue;
+        if (k >= kImageWidthLowWord && k <= kImageBaseMipWord) {
+            const std::uint32_t channel = k - kImageWidthLowWord;
+            image_heap_words_[*value] = {read_index, channel, masks[channel]};
+        }
+        vals_[*value] = Val::missing(kStandaloneDescriptorData);
+    }
+    static_assert(Data::kWidthLow == 0 && Data::kDimensions == 1 && Data::kBaseMip == 2);
+}
+
+V Lower::read_image_heap_word(const ImageHeapWord& word) {
+    ImageHeapRead& read = image_heap_reads_[word.read];
+    const std::size_t c = read.block;
+    if (!read.shape) {
+        using Data = ImageHeapData;
+        const V base = descriptor_address(read.binding).value;
+        const V h = s_.heap_handle(c, base, false, false, kRawBufferSrv);
+        constexpr std::uint32_t kDescriptorShift = 5;
+        constexpr std::uint32_t kRecordShift = 4;
+        static_assert(kResourceDescriptorBytes == (1u << kDescriptorShift) && Data::kBytes == (1u << kRecordShift));
+        const V slot = s_.m.bin(c, Bin::LShr, read.byte_address, s_.m.i32(kDescriptorShift));
+        const Ty i32 = s_.t.i32;
+        const Ty dimensions = s_.m.named_struct("dx.types.Dimensions", {i32, i32, i32, i32});
+        const V dims = s_.op(c, "getDimensions", Attr::ReadOnly, dimensions, 72, {h, s_.m.undef(i32)});
+        const V count = s_.m.bin(c, Bin::LShr, s_.m.extract(c, dims, 0), s_.m.i32(kRecordShift));
+        const V in_range = s_.m.cmp(c, pred::kIult, slot, count);
+        const V low_bits = s_.m.bin(c, Bin::And, read.byte_address, s_.m.i32(kResourceDescriptorBytes - 1));
+        const V aligned = s_.m.cmp(c, pred::kEq, low_bits, s_.m.i32(0));
+        const V byte = s_.m.bin(c, Bin::Shl, slot, s_.m.i32(kRecordShift));
+        const V safe_byte = s_.m.select(c, in_range, byte, s_.m.i32(0));
+        const Ty result = s_.m.named_struct("dx.types.ResRet.i32", {i32, i32, i32, i32, i32});
+        const V data = s_.op(c, "rawBufferLoad.i32", Attr::ReadOnly, result, 139,
+                             {h, safe_byte, s_.m.undef(i32), s_.m.i8(0xf), s_.m.i32(sizeof(std::uint32_t))});
+        const V present = s_.m.cmp(c, pred::kNe, s_.m.extract(c, data, Data::kPresent), s_.m.i32(0));
+        const V valid = s_.m.bin(c, Bin::And, s_.m.bin(c, Bin::And, in_range, aligned), present);
+        const std::size_t abort = abort_block();
+        read.shape = data;
+        s_.m.terminate(c, Term::cond_br(valid, read.next, abort));
+    }
+    return s_.m.extract(c, *read.shape, word.channel);
 }
 
 void Lower::code_smem(const IrInst& inst, Address a) {
@@ -1159,7 +1238,7 @@ V Lower::fetched_index(Site load, std::uint8_t first, bool sampler) {
     return s_.m.bin(c, Bin::LShr, at, shift);
 }
 
-V Lower::heap_index(Site load, std::uint8_t first, bool sampler) {
+V Lower::heap_byte_address(Site load, std::uint8_t first) {
     const auto tracked = scalar_.find(load);
     if (tracked == scalar_.end()) fail("an untracked descriptor load");
     const Address a = tracked->second;
@@ -1185,8 +1264,12 @@ V Lower::heap_index(Site load, std::uint8_t first, bool sampler) {
         const V so = operand(li, fields->soffset);
         addr = s_.m.bin(c, Bin::Add, addr, so);
     }
-    const V shift = s_.m.i32(sampler ? 4 : 5);
-    return s_.m.bin(c, Bin::LShr, addr, shift);
+    return addr;
+}
+
+V Lower::heap_index(Site load, std::uint8_t first, bool sampler) {
+    const V address = heap_byte_address(load, first);
+    return s_.m.bin(cur_, Bin::LShr, address, s_.m.i32(sampler ? 4 : 5));
 }
 
 }  // namespace g6shim::shader::emit
