@@ -56,11 +56,24 @@ void register_range(std::uint64_t start, std::uint64_t bytes, std::uint64_t step
 }
 
 using ImageData = g6shim::shader::emit::ImageHeapData;
+using BufferData = g6shim::shader::emit::BufferHeapData;
 
-struct ImageHeap {
-    ImageHeapBinding binding;
+struct HeapData {
+    HeapDataBinding binding;
     std::uint8_t* data;
     std::uint32_t count;
+};
+
+struct BufferHeapAlias {
+    std::uint32_t index;
+    std::shared_ptr<shadow::Shadow> backing;
+    std::uint64_t address = 0;
+    std::uint64_t bytes = 0;
+};
+
+struct BufferHeap {
+    HeapData data;
+    std::map<std::uint32_t, BufferHeapAlias> aliases;
 };
 
 struct HeapEntry {
@@ -72,7 +85,8 @@ struct HeapEntry {
     bool sampler = false;
     bool tried = false;
     std::unique_ptr<HostHeap> host;
-    std::optional<ImageHeap> image_data;
+    std::optional<HeapData> image_data;
+    std::optional<BufferHeap> buffer_data;
     std::vector<std::uint32_t> pending;
     std::mutex mutex;
 };
@@ -1007,7 +1021,7 @@ std::optional<ImageShapeWords> image_shape(const descriptor::View& view) {
                            base_mip << UserData::kImageBaseMipShift};
 }
 
-void write_image_slot(const ImageHeap& heap, std::uint32_t index, const std::optional<descriptor::View>& view) {
+void write_image_slot(const HeapData& heap, std::uint32_t index, const std::optional<descriptor::View>& view) {
     if (index >= heap.count) return;
     ImageData::Record record{};
     if (view) {
@@ -1019,6 +1033,115 @@ void write_image_slot(const ImageHeap& heap, std::uint32_t index, const std::opt
         }
     }
     std::memcpy(heap.data + static_cast<std::size_t>(index) * ImageData::kBytes, record.data(), ImageData::kBytes);
+}
+
+struct IndexedBufferView {
+    std::uint32_t stride;
+    std::uint32_t records;
+    std::uint64_t address;
+    std::uint64_t bytes;
+};
+
+std::optional<IndexedBufferView> indexed_buffer_view(const descriptor::View& view) {
+    const auto desc = shader_buffer_desc(view);
+    if (!desc || null_shader_buffer(view)) return std::nullopt;
+    const auto range = buffer_range(view);
+    if (!range || range->second == 0 || range->second > UINT32_MAX) return std::nullopt;
+    std::uint64_t resource_bytes = 0;
+    if (const auto* srv = std::get_if<descriptor::ShaderView>(&view)) {
+        const auto memory = resource::buffer_bytes(reinterpret_cast<Object*>(srv->resource));
+        if (memory) resource_bytes = memory->second;
+    } else if (const auto* placed = std::get_if<descriptor::PlacedView>(&view)) {
+        resource::ResourceDesc description{};
+        std::memcpy(&description, placed->resource.data(), sizeof description);
+        resource_bytes = description.width;
+    }
+    const std::uint64_t element = element_size(*desc);
+    if (element == 0 || desc->Buffer.FirstElement > resource_bytes / element) return std::nullopt;
+    const std::uint64_t offset = desc->Buffer.FirstElement * element;
+    if (range->second > resource_bytes - offset) return std::nullopt;
+    if (const auto stride = structured_buffer_stride(*desc))
+        return IndexedBufferView{*stride, desc->Buffer.NumElements, range->first, range->second};
+    if (typed_buffer_format(*desc) != nullptr)
+        return IndexedBufferView{kRawElementBytes, desc->Buffer.NumElements, range->first, range->second};
+    if (linear_raw_buffer(*desc))
+        return IndexedBufferView{0, static_cast<std::uint32_t>(range->second), range->first, range->second};
+    return std::nullopt;
+}
+
+std::optional<BufferData::Record> buffer_slot(HostHeap& host_heap, BufferHeap& heap, std::uint32_t index,
+                                               const IndexedBufferView& view) {
+    const auto backing = shadow::find(view.address, view.bytes);
+    host::Host* gpu = host::host();
+    if (!backing || gpu == nullptr) return std::nullopt;
+    const std::uint64_t offset = (*backing)->offset(view.address);
+    if (offset % kRawElementBytes != 0) return std::nullopt;
+    constexpr std::uint32_t kAlignment = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT;
+    const auto prefix = static_cast<std::uint32_t>(offset % kAlignment);
+    if (view.bytes > UINT32_MAX - prefix) return std::nullopt;
+    auto alias = heap.aliases.find(index);
+    if (alias == heap.aliases.end()) {
+        const auto reserved = host_heap.dynamic(1);
+        if (!reserved) return std::nullopt;
+        alias = heap.aliases.emplace(index, BufferHeapAlias{*reserved, nullptr}).first;
+    }
+    if (alias->second.backing != *backing || alias->second.address != view.address ||
+        alias->second.bytes != view.bytes) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
+        desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        desc.Buffer.FirstElement = (offset - prefix) / kRawElementBytes;
+        desc.Buffer.NumElements = static_cast<std::uint32_t>((view.bytes + prefix) / kRawElementBytes);
+        desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+        gpu->device()->CreateShaderResourceView((*backing)->buffer(), &desc, host_heap.cpu(alias->second.index));
+        alias->second = {alias->second.index, *backing, view.address, view.bytes};
+    }
+    return BufferData::Record{alias->second.index + 1, view.stride, prefix, view.records};
+}
+
+void write_buffer_slot(HostHeap& host_heap, BufferHeap& heap, std::uint32_t index,
+                       const std::optional<descriptor::View>& descriptor) {
+    if (index >= heap.data.count) return;
+    const auto view = descriptor ? indexed_buffer_view(*descriptor) : std::nullopt;
+    const auto record = view ? buffer_slot(host_heap, heap, index, *view) : std::nullopt;
+    if (!record) {
+        const auto alias = heap.aliases.find(index);
+        if (alias != heap.aliases.end()) alias->second.backing.reset();
+        if (view || (descriptor && !null_shader_buffer(*descriptor) && shader_buffer_desc(*descriptor))) {
+            static std::once_flag once;
+            std::call_once(once, [] {
+                G6SHIM_WARN("d3d12_xs: indexed reads cannot access an unsupported buffer view");
+            });
+        }
+    }
+    const BufferData::Record words = record.value_or(BufferData::Record{});
+    std::memcpy(heap.data.data + static_cast<std::size_t>(index) * BufferData::kBytes,
+                words.data(), BufferData::kBytes);
+}
+
+std::optional<HeapData> create_heap_data(HeapEntry& entry) {
+    host::Host* gpu = host::host();
+    if (!entry.host || gpu == nullptr) return std::nullopt;
+    const std::uint32_t count = std::min({entry.count, entry.host->count(), kPortableViews});
+    if (count == 0) return std::nullopt;
+    const auto reserved = entry.host->dynamic(1);
+    if (!reserved) return std::nullopt;
+    static_assert(ImageData::kBytes == BufferData::kBytes);
+    auto upload = gpu->upload_buffer(static_cast<std::uint64_t>(count) * ImageData::kBytes);
+    if (!upload) {
+        entry.host->release(*reserved, 1);
+        return std::nullopt;
+    }
+    HeapData data{{*reserved, std::move(upload->first)}, upload->second, count};
+    D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
+    desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    desc.Buffer.NumElements = count * ImageData::kWords;
+    desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+    gpu->device()->CreateShaderResourceView(data.binding.resource.Get(), &desc, entry.host->cpu(*reserved));
+    return data;
 }
 
 }  // namespace
@@ -1154,6 +1277,7 @@ void mirror(std::uint64_t handle) {
     }
     const auto view = entry->host->mirror(index, handle, false);
     if (entry->image_data) write_image_slot(*entry->image_data, index, view);
+    if (entry->buffer_data) write_buffer_slot(*entry->host, *entry->buffer_data, index, view);
 }
 
 void release_dynamic(Object* heap, std::uint32_t first, std::uint32_t count) {
@@ -1179,36 +1303,40 @@ HostHeap* for_heap(Object* heap) {
     return entry->host.get();
 }
 
-std::optional<ImageHeapBinding> image_heap_data(Object* heap) {
+std::optional<HeapDataBinding> image_heap_data(Object* heap) {
     const auto entry = entry_for_heap(heap);
     if (!entry || entry->sampler) return std::nullopt;
     std::lock_guard<std::mutex> lock(entry->mutex);
     if (entry->image_data) return entry->image_data->binding;
-    host::Host* gpu = host::host();
-    if (!entry->host || gpu == nullptr) return std::nullopt;
-    const std::uint32_t count = std::min({entry->count, entry->host->count(), kPortableViews});
-    if (count == 0) return std::nullopt;
-    const auto reserved = entry->host->dynamic(1);
-    if (!reserved) return std::nullopt;
-    auto upload = gpu->upload_buffer(static_cast<std::uint64_t>(count) * ImageData::kBytes);
-    if (!upload) {
-        entry->host->release(*reserved, 1);
-        return std::nullopt;
-    }
-    ImageHeap data{{*reserved, std::move(upload->first)}, upload->second, count};
-    for (std::uint32_t index = 0; index < count; ++index) {
+    auto data = create_heap_data(*entry);
+    if (!data) return std::nullopt;
+    for (std::uint32_t index = 0; index < data->count; ++index) {
         const std::uint64_t handle = entry->start + static_cast<std::uint64_t>(index) * entry->step;
-        write_image_slot(data, index, descriptor::view(handle));
+        write_image_slot(*data, index, descriptor::view(handle));
     }
-    D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
-    desc.Format = DXGI_FORMAT_R32_TYPELESS;
-    desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-    desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    desc.Buffer.NumElements = count * ImageData::kWords;
-    desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
-    gpu->device()->CreateShaderResourceView(data.binding.resource.Get(), &desc, entry->host->cpu(*reserved));
     entry->image_data = std::move(data);
     return entry->image_data->binding;
+}
+
+std::optional<HeapDataBinding> buffer_heap_data(Object* heap, host::HostList& list) {
+    const auto entry = entry_for_heap(heap);
+    if (!entry || entry->sampler) return std::nullopt;
+    std::lock_guard<std::mutex> lock(entry->mutex);
+    if (!entry->buffer_data) {
+        auto data = create_heap_data(*entry);
+        if (!data) return std::nullopt;
+        auto& buffers = entry->buffer_data.emplace(BufferHeap{std::move(*data), {}});
+        for (std::uint32_t index = 0; index < buffers.data.count; ++index) {
+            const std::uint64_t handle = entry->start + static_cast<std::uint64_t>(index) * entry->step;
+            write_buffer_slot(*entry->host, buffers, index, descriptor::view(handle));
+        }
+    }
+    for (const auto& item : entry->buffer_data->aliases) {
+        const BufferHeapAlias& alias = item.second;
+        if (!alias.backing) continue;
+        alias.backing->refresh(list, alias.address, alias.bytes);
+    }
+    return entry->buffer_data->data.binding;
 }
 
 }  // namespace g6shim::d3d12_xs::descriptor_host

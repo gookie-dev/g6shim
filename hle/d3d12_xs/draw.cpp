@@ -320,9 +320,11 @@ const descriptor::Heap* State::heap_of(std::uint64_t handle) const {
 std::optional<std::uint32_t> State::descriptor_value(
     host::HostList& list, bool compute, const g6shim::shader::emit::UserData& data) const {
     using Source = g6shim::shader::emit::UserData::Source;
-    if (data.source == Source::ImageHeapData) {
+    if (data.source == Source::ImageHeapData || data.source == Source::BufferHeapData) {
         if (heaps_[0] == nullptr) return std::nullopt;
-        const auto binding = descriptor_host::image_heap_data(heaps_[0]);
+        const auto binding = data.source == Source::ImageHeapData
+                                 ? descriptor_host::image_heap_data(heaps_[0])
+                                 : descriptor_host::buffer_heap_data(heaps_[0], list);
         if (!binding) return std::nullopt;
         list.keep(binding->resource.Get());
         return binding->index;

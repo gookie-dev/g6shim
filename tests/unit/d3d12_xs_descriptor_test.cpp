@@ -373,6 +373,95 @@ TEST(d3d12_xs_indexed_image_shape_follows_view_writes_and_copies) {
     release(object);
 }
 
+TEST(d3d12_xs_indexed_buffer_views_track_strides_and_bounds) {
+    host::Host* gpu = host::host();
+    if (gpu == nullptr) return;
+    const auto list = gpu->new_list();
+    CHECK(list != nullptr);
+    if (!list) return;
+    const descriptor::HeapDesc desc{descriptor::kViewsKind, 3, descriptor::kShaderVisible, 0};
+    Object* object = nullptr;
+    CHECK(create_heap_with(desc, {}, &object) == S_OK);
+    if (object == nullptr) return;
+    const auto& heap = *static_cast<descriptor::Heap*>(object);
+    const auto step = descriptor::increment_size(nullptr, desc.kind);
+    const resource::HeapProperties properties{1, 0, 0, 1, 1};
+    resource::ResourceDesc buffer{};
+    buffer.dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer.width = 128;
+    buffer.height = 1;
+    buffer.depth_or_array_size = 1;
+    buffer.mip_levels = 1;
+    buffer.sample_count = 1;
+    buffer.layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    Object* buffer_object = nullptr;
+    CHECK(resource::create_committed(nullptr, &properties, 0, &buffer, 0, nullptr,
+                                     &resource::kResourceIids[0], &buffer_object) == S_OK);
+    if (buffer_object == nullptr) {
+        release(object);
+        return;
+    }
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Buffer.FirstElement = 1;
+    srv.Buffer.NumElements = 4;
+    srv.Buffer.StructureByteStride = 12;
+    std::array<std::uint32_t, 10> words{};
+    const auto create = [&](std::uint64_t location) {
+        std::memcpy(words.data(), &srv, sizeof srv);
+        descriptor::create_srv(nullptr, buffer_object, words.data(), location);
+    };
+    create(heap.start);
+    const auto* host_heap = descriptor_host::for_heap(object);
+    const auto binding = descriptor_host::buffer_heap_data(object, *list);
+    CHECK(host_heap != nullptr);
+    CHECK(binding.has_value());
+    if (host_heap != nullptr && binding) {
+        CHECK(binding->index >= host_heap->count());
+        using Data = g6shim::shader::emit::BufferHeapData;
+        const D3D12_RANGE read_range{0, desc.count * Data::kBytes};
+        void* mapped = nullptr;
+        CHECK(binding->resource->Map(0, &read_range, &mapped) == S_OK);
+        if (mapped != nullptr) {
+            const auto record = [mapped](std::size_t slot) {
+                Data::Record result{};
+                std::memcpy(result.data(), static_cast<const std::uint8_t*>(mapped) + slot * Data::kBytes,
+                            Data::kBytes);
+                return result;
+            };
+            const auto first = record(0);
+            CHECK(first[Data::kDescriptor] > host_heap->count());
+            CHECK(first[Data::kStride] == 12);
+            CHECK(first[Data::kPrefix] == 12);
+            CHECK(first[Data::kRecords] == 4);
+            CHECK(record(1) == Data::Record{});
+            descriptor::copy_simple(nullptr, 1, heap.start + step, heap.start, desc.kind);
+            const auto copy = record(1);
+            CHECK(copy[Data::kDescriptor] != first[Data::kDescriptor]);
+            CHECK(copy[Data::kStride] == first[Data::kStride]);
+            CHECK(copy[Data::kPrefix] == first[Data::kPrefix]);
+            CHECK(copy[Data::kRecords] == first[Data::kRecords]);
+            srv.Buffer.StructureByteStride = 20;
+            srv.Buffer.FirstElement = 2;
+            srv.Buffer.NumElements = 3;
+            create(heap.start);
+            const auto updated = record(0);
+            CHECK(updated[Data::kDescriptor] == first[Data::kDescriptor]);
+            CHECK(updated[Data::kStride] == 20);
+            CHECK(updated[Data::kPrefix] == 8);
+            CHECK(updated[Data::kRecords] == 3);
+            srv.Buffer.NumElements = 5;
+            create(heap.start);
+            CHECK(record(0) == Data::Record{});
+            const D3D12_RANGE no_write{0, 0};
+            binding->resource->Unmap(0, &no_write);
+        }
+    }
+    release(buffer_object);
+    release(object);
+}
+
 TEST(d3d12_xs_sampler_lod_word_uses_the_bound_descriptor) {
     constexpr std::uint32_t kSlotDwords = 4;
     const descriptor::HeapDesc desc{descriptor::kSamplersKind, 3, descriptor::kShaderVisible, 0};

@@ -3,9 +3,14 @@
 #include "check.hpp"
 #include "shader_lowering.hpp"
 
+#include "d3d12_xs/descriptor_host.hpp"
+#include "d3d12_xs/host.hpp"
+
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <iterator>
 #include <string_view>
@@ -46,6 +51,7 @@ constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 constexpr std::string_view kImageSampleBiasA16 = "image_sample_bias_a16";
 constexpr std::string_view kImageShapeOnly = "image_shape_only";
 constexpr std::string_view kImageHeapShape = "image_heap_shape";
+constexpr std::string_view kBufferHeapStride = "buffer_heap_stride";
 constexpr std::string_view kSamplerLodData = "sampler_lod_data";
 constexpr std::string_view kPackedInputPartner = "packed_input_partner";
 constexpr std::string_view kSelectReadLaneMask = "select_readlane_mask";
@@ -63,6 +69,101 @@ Lowered lower_fixture(const Fixture& fixture, const std::vector<UsedResource>& u
                          used, kUserSgprs << kUserSgprShift, {1, 1, 1});
 }
 
+void check_indexed_buffer_results(Lowered lowered) {
+    using namespace g6shim::d3d12_xs;
+    using Microsoft::WRL::ComPtr;
+    host::Host* gpu = host::host();
+    auto validator = load_validator();
+    if (gpu == nullptr || !validator) return;
+    validator->validate(lowered.dxil);
+
+    constexpr std::uint32_t kOutputDescriptor = 0;
+    constexpr std::uint32_t kMetadata = 1;
+    constexpr std::uint32_t kAlias = 2;
+    const auto heap = descriptor_host::HostHeap::create(false, kAlias + 1);
+    const auto input = gpu->upload_buffer(64);
+    const auto output = gpu->shared_buffer(16);
+    using Data = BufferHeapData;
+    const std::array<Data::Record, 2> records{{{kAlias + 1, 12, 12, 4}, {kAlias + 1, 20, 8, 2}}};
+    const auto metadata = gpu->upload_buffer(sizeof records);
+    CHECK((heap && input && output && metadata));
+    if (!heap || !input || !output || !metadata) return;
+    std::array<std::uint32_t, 16> samples{};
+    for (std::size_t i = 0; i < samples.size(); ++i) samples[i] = 100 + static_cast<std::uint32_t>(i);
+    std::memcpy(input->second, samples.data(), sizeof samples);
+    std::memcpy(metadata->second, records.data(), sizeof records);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R32_TYPELESS;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+    srv.Buffer.NumElements = static_cast<UINT>(samples.size());
+    gpu->device()->CreateShaderResourceView(input->first.Get(), &srv, heap->cpu(kAlias));
+    srv.Buffer.NumElements = static_cast<UINT>(records.size()) * Data::kWords;
+    gpu->device()->CreateShaderResourceView(metadata->first.Get(), &srv, heap->cpu(kMetadata));
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+    uav.Format = DXGI_FORMAT_R32_TYPELESS;
+    uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uav.Buffer.NumElements = 4;
+    uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+    gpu->device()->CreateUnorderedAccessView(output->first.Get(), nullptr, &uav, heap->cpu(kOutputDescriptor));
+
+    std::array<std::uint32_t, 64> constants{};
+    std::uint32_t count = 0;
+    for (const UserData& field : lowered.user_data) {
+        if (field.index >= constants.size()) { CHECK(false); return; }
+        count = std::max(count, field.index + 1);
+        if (field.source == UserData::Source::BufferHeapData) constants[field.index] = kMetadata;
+        if (field.root.kind == RootType::Kind::Table) constants[field.index] = kOutputDescriptor * 32;
+    }
+    D3D12_ROOT_PARAMETER parameter{};
+    parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    parameter.Constants.Num32BitValues = count;
+    D3D12_ROOT_SIGNATURE_DESC root_desc{};
+    root_desc.NumParameters = 1;
+    root_desc.pParameters = &parameter;
+    root_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
+    ComPtr<ID3DBlob> blob;
+    CHECK(SUCCEEDED(D3D12SerializeRootSignature(&root_desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, nullptr)));
+    if (!blob) return;
+    ComPtr<ID3D12RootSignature> root;
+    CHECK(SUCCEEDED(gpu->device()->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+                                                      IID_PPV_ARGS(&root))));
+    if (!root) return;
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pipeline_desc{};
+    pipeline_desc.pRootSignature = root.Get();
+    pipeline_desc.CS = {lowered.dxil.data(), lowered.dxil.size()};
+    ComPtr<ID3D12PipelineState> pipeline;
+    CHECK(SUCCEEDED(gpu->device()->CreateComputePipelineState(&pipeline_desc, IID_PPV_ARGS(&pipeline))));
+    if (!pipeline) return;
+    const auto run = [&](std::uint32_t descriptor, std::uint32_t index, std::uint32_t offset) {
+        std::array<std::uint32_t, 3> result{UINT32_MAX, UINT32_MAX, UINT32_MAX};
+        const auto list = gpu->new_list();
+        if (!list) return result;
+        std::memcpy(output->second, result.data(), sizeof result);
+        constants[0] = descriptor;
+        constants[1] = index;
+        constants[2] = offset;
+        auto* commands = list->list();
+        ID3D12DescriptorHeap* heaps[] = {heap->heap()};
+        commands->SetDescriptorHeaps(1, heaps);
+        commands->SetComputeRootSignature(root.Get());
+        commands->SetPipelineState(pipeline.Get());
+        commands->SetComputeRoot32BitConstants(0, count, constants.data(), 0);
+        commands->Dispatch(1, 1, 1);
+        list->close();
+        gpu->execute({list.get()});
+        std::memcpy(result.data(), output->second, sizeof result);
+        return result;
+    };
+    CHECK((run(0, 1, 0) == std::array{107u, 108u, 109u}));
+    CHECK((run(1, 1, 0) == std::array{108u, 109u, 110u}));
+    CHECK((run(0, 3, 0) == std::array{0u, 0u, 0u}));
+    CHECK((run(0, 0, UINT32_MAX - 3) == std::array{0u, 0u, 0u}));
+    CHECK((run(2, 0, 0) == std::array{0u, 0u, 0u}));
+}
+
 }  // namespace
 
 TEST(shader_fixtures_translate_and_validate) {
@@ -74,7 +175,8 @@ TEST(shader_fixtures_translate_and_validate) {
             fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords ||
             fixture.name == kImageSampleBiasA16 || fixture.name == kScalarBufferCountOnly ||
             fixture.name == kPackedInputPartner || fixture.name == kSelectReadLaneMask ||
-            fixture.name == kImageShapeOnly || fixture.name == kImageHeapShape || fixture.name == kSamplerLodData)
+            fixture.name == kImageShapeOnly || fixture.name == kImageHeapShape ||
+            fixture.name == kBufferHeapStride || fixture.name == kSamplerLodData)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -360,6 +462,36 @@ TEST(shader_fixtures_translate_image_shape_at_a_computed_heap_index) {
         check_dxil(lowered.dxil, unused.name);
     } catch (const std::exception& error) {
         std::printf("fixture %s with an unused load did not translate: %s\n", unused.name, error.what());
+        CHECK(false);
+    }
+}
+
+TEST(shader_fixtures_translate_a_buffer_load_with_a_runtime_stride) {
+    const Fixture* fixture = find_fixture(kBufferHeapStride);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    constexpr std::uint8_t kHeapUserData = 4;
+    constexpr std::uint8_t kHeapSlot = 2;
+    constexpr std::uint8_t kOutputUserData = 6;
+    constexpr std::uint8_t kOutputSlot = 1;
+    try {
+        const auto lowered = lower_compute(fixture->words, kFixtureVgprs,
+            {root_param(RootType::Kind::Constants, kConstantsUserData, kConstantsSlot),
+             root_param(RootType::Kind::ResourceHeap, kHeapUserData, kHeapSlot),
+             root_param(RootType::Kind::Table, kOutputUserData, kOutputSlot)},
+            {used_uav(kOutputUserData, kOutputSlot)}, (kOutputUserData + 1u) << kUserSgprShift, {1, 1, 1});
+        const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(), [](const UserData& entry) {
+            return entry.source == UserData::Source::BufferHeapData;
+        });
+        CHECK(field != lowered.user_data.end());
+        if (field != lowered.user_data.end()) {
+            CHECK(field->root.kind == RootType::Kind::ResourceHeap);
+            CHECK(field->slot == kHeapSlot);
+        }
+        check_dxil(lowered.dxil, fixture->name);
+        check_indexed_buffer_results(lowered);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
         CHECK(false);
     }
 }

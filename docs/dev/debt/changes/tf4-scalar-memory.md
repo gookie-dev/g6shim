@@ -8,6 +8,9 @@
 - Scalar reads of the upper word of a buffer descriptor picked by a shader-computed resource heap index still fail. The stride may vary with the selected view.
   Closes when: the shader can read descriptor word 1 from the selected heap slot.
   Title IDs: 7952987A
+- Indexed dword loads can use the stride of the selected structured buffer. Indexed stores and atomics still require a declared stride. An indexed load with a view that has no supported raw alias returns zero.
+  Closes when: indexed stores and atomics use the selected view's stride and the runtime can supply raw aliases for the remaining buffer views.
+  Title IDs: 7952987A
 - A shader can read the LOD word of an ordinary sampler at a fixed heap slot. Extended sampler descriptors and shader-computed sampler indices are unavailable.
   Closes when: the runtime can supply the required tuning fields and indexed sampler descriptor data.
   Title IDs: 7952987A

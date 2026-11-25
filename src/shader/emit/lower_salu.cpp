@@ -938,31 +938,37 @@ V Lower::read_image_heap_word(const ImageHeapWord& word) {
     const std::size_t c = read.block;
     if (!read.shape) {
         using Data = ImageHeapData;
-        const V base = descriptor_address(read.binding).value;
-        const V h = s_.heap_handle(c, base, false, false, kRawBufferSrv);
-        constexpr std::uint32_t kDescriptorShift = 5;
-        constexpr std::uint32_t kRecordShift = 4;
-        static_assert(kResourceDescriptorBytes == (1u << kDescriptorShift) && Data::kBytes == (1u << kRecordShift));
-        const V slot = s_.m.bin(c, Bin::LShr, read.byte_address, s_.m.i32(kDescriptorShift));
-        const Ty i32 = s_.t.i32;
-        const Ty dimensions = s_.m.named_struct("dx.types.Dimensions", {i32, i32, i32, i32});
-        const V dims = s_.op(c, "getDimensions", Attr::ReadOnly, dimensions, 72, {h, s_.m.undef(i32)});
-        const V count = s_.m.bin(c, Bin::LShr, s_.m.extract(c, dims, 0), s_.m.i32(kRecordShift));
-        const V in_range = s_.m.cmp(c, pred::kIult, slot, count);
-        const V low_bits = s_.m.bin(c, Bin::And, read.byte_address, s_.m.i32(kResourceDescriptorBytes - 1));
-        const V aligned = s_.m.cmp(c, pred::kEq, low_bits, s_.m.i32(0));
-        const V byte = s_.m.bin(c, Bin::Shl, slot, s_.m.i32(kRecordShift));
-        const V safe_byte = s_.m.select(c, in_range, byte, s_.m.i32(0));
-        const Ty result = s_.m.named_struct("dx.types.ResRet.i32", {i32, i32, i32, i32, i32});
-        const V data = s_.op(c, "rawBufferLoad.i32", Attr::ReadOnly, result, 139,
-                             {h, safe_byte, s_.m.undef(i32), s_.m.i8(0xf), s_.m.i32(sizeof(std::uint32_t))});
+        const auto [data, valid_slot] = read_heap_record(c, read.byte_address, read.binding);
         const V present = s_.m.cmp(c, pred::kNe, s_.m.extract(c, data, Data::kPresent), s_.m.i32(0));
-        const V valid = s_.m.bin(c, Bin::And, s_.m.bin(c, Bin::And, in_range, aligned), present);
+        const V valid = s_.m.bin(c, Bin::And, valid_slot, present);
         const std::size_t abort = abort_block();
         read.shape = data;
         s_.m.terminate(c, Term::cond_br(valid, read.next, abort));
     }
     return s_.m.extract(c, *read.shape, word.channel);
+}
+
+std::pair<V, V> Lower::read_heap_record(std::size_t c, V byte_address, const UserData& binding) {
+    const V base = descriptor_address(binding).value;
+    const V h = s_.heap_handle(c, base, false, false, kRawBufferSrv);
+    constexpr std::uint32_t kDescriptorShift = 5;
+    constexpr std::uint32_t kRecordShift = 4;
+    static_assert(kResourceDescriptorBytes == (1u << kDescriptorShift));
+    static_assert(ImageHeapData::kBytes == (1u << kRecordShift) && ImageHeapData::kBytes == BufferHeapData::kBytes);
+    const V slot = s_.m.bin(c, Bin::LShr, byte_address, s_.m.i32(kDescriptorShift));
+    const Ty i32 = s_.t.i32;
+    const Ty dimensions = s_.m.named_struct("dx.types.Dimensions", {i32, i32, i32, i32});
+    const V dims = s_.op(c, "getDimensions", Attr::ReadOnly, dimensions, 72, {h, s_.m.undef(i32)});
+    const V count = s_.m.bin(c, Bin::LShr, s_.m.extract(c, dims, 0), s_.m.i32(kRecordShift));
+    const V in_range = s_.m.cmp(c, pred::kIult, slot, count);
+    const V low_bits = s_.m.bin(c, Bin::And, byte_address, s_.m.i32(kResourceDescriptorBytes - 1));
+    const V aligned = s_.m.cmp(c, pred::kEq, low_bits, s_.m.i32(0));
+    const V byte = s_.m.bin(c, Bin::Shl, slot, s_.m.i32(kRecordShift));
+    const V safe_byte = s_.m.select(c, in_range, byte, s_.m.i32(0));
+    const Ty result = s_.m.named_struct("dx.types.ResRet.i32", {i32, i32, i32, i32, i32});
+    const V data = s_.op(c, "rawBufferLoad.i32", Attr::ReadOnly, result, 139,
+                         {h, safe_byte, s_.m.undef(i32), s_.m.i8(0xf), s_.m.i32(sizeof(std::uint32_t))});
+    return {data, s_.m.bin(c, Bin::And, in_range, aligned)};
 }
 
 void Lower::code_smem(const IrInst& inst, Address a) {

@@ -207,11 +207,14 @@ private:
     V masked_descriptor_value(Value value, std::uint32_t mask);
     void defer_image_heap_read(const IrInst& inst, Site site, std::uint8_t code, const RootParam& root);
     V read_image_heap_word(const ImageHeapWord& word);
+    std::pair<V, V> read_heap_record(std::size_t c, V byte_address, const UserData& binding);
     void fill_masked_descriptor_phis();
     Val user_dword(std::uint32_t index);
     void code_smem(const IrInst& inst, Address a);
     V cbuffer_dword(V h, V a);
     std::vector<V> format_load(V h, V off, std::uint8_t format, std::uint32_t channels);
+    std::vector<V> load_indexed_heap_buffer(const Source& src, V index, V offset, std::uint32_t count,
+                                             std::optional<V> guard_value);
     std::pair<std::uint32_t, std::optional<V>> built_offset(const Source& src);
     const UsedResource* used_kind(const Source& src) const;
     V handle(Site site, const Source& src, bool sampler, std::pair<std::uint32_t, std::uint32_t> props);

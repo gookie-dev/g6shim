@@ -99,6 +99,8 @@ Fixed shader-resource views of two-dimensional textures expose width minus one a
 
 An eight-word scalar image read through the resource heap can fetch the same fields from a bounded raw buffer with one record per heap slot. Descriptor creation and copies update the record. A slot outside the buffer or a view without those fields ends the affected shader invocation. Compute shaders with group barriers keep the translation failure for this read.
 
+An indexed dword load from a heap buffer with no declared stride reads the selected view's stride and record count from a metadata buffer. A raw view of the same host storage starts on a 16-byte boundary. The metadata keeps the byte displacement from that boundary to the original view. The load checks the index, alignment and full byte range before reading. For a linear raw view the stride is zero and the count is in bytes.
+
 An ordinary sampler descriptor exposes its LOD word at a fixed sampler heap slot. Its minimum and maximum are clamped and truncated to unsigned 4.8 fields, and the upper byte is zero. This layout was observed in synthetic SDK-created samplers on devices `1002:744C` and `1002:13C0`. Extended sampler descriptors require a separate encoding for their tuning fields.
 
 Word 5 of the eight-word image descriptor has reserved zero bits at 31:24. Checked two-dimensional shader-resource views use value 4 for the sampling performance field at bits 22:20 and zero for the LOD-warning field at bits 19:8, as observed in synthetic SDK-created views across color formats, mip clamps and resource flags. An unbound view supplies zero.

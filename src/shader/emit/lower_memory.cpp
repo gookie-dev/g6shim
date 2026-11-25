@@ -372,13 +372,23 @@ void Lower::buffer(const IrInst& inst, std::size_t b, std::size_t i) {
     std::optional<V> index;
     if (fields->idxen) index = vaddr(0);
     V off = s_.m.i32(fields->offset);
-    if (fields->offen) off = s_.m.bin(c, Bin::Add, off, vaddr(fields->idxen ? 1 : 0));
+    std::optional<V> vector_offset;
+    if (fields->offen) {
+        vector_offset = vaddr(fields->idxen ? 1 : 0);
+        off = s_.m.bin(c, Bin::Add, off, *vector_offset);
+    }
+    const V before_scalar_offset = off;
     bool soffset_null = false;
     if (const auto* scalar = std::get_if<ScalarOperand>(&fields->soffset))
         soffset_null = scalar->code == kNull;
     if (const auto* constant = std::get_if<ConstantOperand>(&fields->soffset))
         if (constant->code == 128) soffset_null = true;
-    if (!soffset_null) off = s_.m.bin(c, Bin::Add, off, operand(inst, fields->soffset));
+    std::optional<V> scalar_offset;
+    if (!soffset_null) {
+        scalar_offset = operand(inst, fields->soffset);
+        off = s_.m.bin(c, Bin::Add, off, *scalar_offset);
+    }
+    const V after_scalar_offset = off;
     const auto descriptor = descriptors_.find({site, false});
     if (descriptor == descriptors_.end()) fail("an untracked buffer");
     const Source& src = *descriptor->second;
@@ -513,6 +523,25 @@ void Lower::buffer(const IrInst& inst, std::size_t b, std::size_t i) {
             write(inst, Reg::v(static_cast<std::uint8_t>(data->reg + k)), loaded[k], guard_value);
         return;
     }
+    const std::uint32_t stride = used != nullptr ? used->stride : 0;
+    if (index && !typed && !uav && !d16 && (stride < 4 || stride % 4 != 0)) {
+        if (!fields->data) fail("a buffer result");
+        const auto* data = std::get_if<VectorOperand>(&*fields->data);
+        if (data == nullptr) fail("a buffer result");
+        if (vector_offset || scalar_offset) {
+            V valid = s_.m.boolean(true);
+            if (vector_offset) valid = s_.m.cmp(c, pred::kIuge, before_scalar_offset, *vector_offset);
+            if (scalar_offset) {
+                const V scalar_fits = s_.m.cmp(c, pred::kIuge, after_scalar_offset, *scalar_offset);
+                valid = s_.m.bin(c, Bin::And, valid, scalar_fits);
+            }
+            off = s_.m.select(c, valid, off, s_.m.i32(UINT32_MAX));
+        }
+        const auto loaded = load_indexed_heap_buffer(src, *index, off, count, guard_value);
+        for (std::uint32_t k = 0; k < count; ++k)
+            write(inst, Reg::v(static_cast<std::uint8_t>(data->reg + k)), loaded[k], guard_value);
+        return;
+    }
     V r;
     if (typed) {
         if (fields->offen || off.kind == V::Kind::Inst || fields->offset != 0)
@@ -525,7 +554,6 @@ void Lower::buffer(const IrInst& inst, std::size_t b, std::size_t i) {
         const V mask = s_.m.i8(static_cast<std::uint8_t>((1u << count) - 1));
         const V align = s_.m.i32(4);
         if (index) {
-            const std::uint32_t stride = used != nullptr ? used->stride : 0;
             if (stride < 4 || stride % 4 != 0) fail("a structured buffer of unknown stride");
             const V h = handle(site, src, false, {12 | u, stride});
             r = s_.op(c, "rawBufferLoad.f32", Attr::ReadOnly, s_.t.res_ret, 139,
@@ -563,6 +591,57 @@ void Lower::buffer(const IrInst& inst, std::size_t b, std::size_t i) {
         const V x = as_int(s_.m.extract(c, r, k));
         write(inst, Reg::v(static_cast<std::uint8_t>(data->reg + k)), x, guard_value);
     }
+}
+
+std::vector<V> Lower::load_indexed_heap_buffer(const Source& src, V index, V offset, std::uint32_t count,
+                                               std::optional<V> guard_value) {
+    constexpr Why unknown = "a structured buffer of unknown stride";
+    if (src.kind != Source::Kind::Loaded) fail(unknown);
+    const auto address = scalar_.find(src.load);
+    if (address == scalar_.end() || address->second.param >= x_->native->layout.size()) fail(unknown);
+    const RootParam& root = x_->native->layout[address->second.param];
+    if (root.root.kind != RootType::Kind::ResourceHeap) fail(unknown);
+
+    using Data = BufferHeapData;
+    const V byte_address = heap_byte_address(src.load, src.first);
+    const std::size_t c = cur_;
+    const UserData binding{0, root.slot, root.root, 0, UserData::Source::BufferHeapData};
+    const auto [record, valid_slot] = read_heap_record(c, byte_address, binding);
+    const V zero = s_.m.i32(0);
+    const V descriptor = s_.m.extract(c, record, Data::kDescriptor);
+    const V stride = s_.m.extract(c, record, Data::kStride);
+    const V prefix = s_.m.extract(c, record, Data::kPrefix);
+    const V records = s_.m.extract(c, record, Data::kRecords);
+    const V raw = s_.m.cmp(c, pred::kEq, stride, zero);
+    const V in_records = s_.m.cmp(c, pred::kIult, index, records);
+    const V valid_index = s_.m.bin(c, Bin::Or, raw, in_records);
+    const V row = s_.m.bin(c, Bin::Mul, index, stride);
+    const V bytes = s_.m.select(c, raw, records, s_.m.bin(c, Bin::Mul, records, stride));
+    const V remaining = s_.m.bin(c, Bin::Sub, bytes, row);
+    constexpr std::uint32_t kWordBytes = sizeof(std::uint32_t);
+    const V payload = s_.m.i32(count * kWordBytes);
+    const V fits = s_.m.cmp(c, pred::kIuge, remaining, payload);
+    const V max_offset = s_.m.bin(c, Bin::Sub, remaining, payload);
+    const V in_bytes = s_.m.cmp(c, pred::kIule, offset, max_offset);
+    const V unaligned = s_.m.bin(c, Bin::And, offset, s_.m.i32(kWordBytes - 1));
+    const V aligned = s_.m.cmp(c, pred::kEq, unaligned, zero);
+    const V present = s_.m.cmp(c, pred::kNe, descriptor, zero);
+    V valid = s_.m.bin(c, Bin::And, valid_slot, present);
+    for (const V test : {valid_index, fits, in_bytes, aligned}) valid = s_.m.bin(c, Bin::And, valid, test);
+    if (guard_value) valid = s_.m.bin(c, Bin::And, valid, *guard_value);
+
+    const auto guarded = begin_guarded(valid);
+    const V slot = s_.m.bin(cur_, Bin::Sub, descriptor, s_.m.i32(1));
+    const V h = s_.heap_handle(cur_, slot, false, true, {11, 0});
+    const V start = s_.m.bin(cur_, Bin::Add, prefix, row);
+    const V at = s_.m.bin(cur_, Bin::Add, start, offset);
+    const V mask = s_.m.i8(static_cast<std::uint8_t>((1u << count) - 1));
+    const V r = s_.op(cur_, "rawBufferLoad.f32", Attr::ReadOnly, s_.t.res_ret, 139,
+                      {h, at, s_.m.undef(s_.t.i32), mask, s_.m.i32(kWordBytes)});
+    std::vector<std::pair<V, V>> values;
+    values.reserve(count);
+    for (std::uint32_t k = 0; k < count; ++k) values.emplace_back(as_int(s_.m.extract(cur_, r, k)), zero);
+    return end_guarded(guarded, values);
 }
 
 }  // namespace g6shim::shader::emit

@@ -27,7 +27,8 @@ struct UserData {
         LinearRawBufferHighWord, LinearRawBufferFormatWord, StructuredBufferFormatWord,
         ImageSamplingFields, TypedBufferFormatWord, TypedBufferHighWord,
         ConstantBufferHighWord, ConstantBufferRecordCount, ConstantBufferFormatWord,
-        ShaderBufferRecordCount, ImageWidthLowBits, ImageDimensions, SamplerLodWord, ImageBaseMip, ImageHeapData
+        ShaderBufferRecordCount, ImageWidthLowBits, ImageDimensions, SamplerLodWord, ImageBaseMip, ImageHeapData,
+        BufferHeapData
     };
 
     std::uint32_t index = 0;
@@ -75,6 +76,16 @@ struct ImageHeapData {
     static constexpr std::uint32_t kDimensions = 1;
     static constexpr std::uint32_t kBaseMip = 2;
     static constexpr std::uint32_t kPresent = 3;
+    static constexpr std::uint32_t kWords = 4;
+    static constexpr std::uint32_t kBytes = kWords * sizeof(std::uint32_t);
+    using Record = std::array<std::uint32_t, kWords>;
+};
+
+struct BufferHeapData {
+    static constexpr std::uint32_t kDescriptor = 0;
+    static constexpr std::uint32_t kStride = 1;
+    static constexpr std::uint32_t kPrefix = 2;
+    static constexpr std::uint32_t kRecords = 3;
     static constexpr std::uint32_t kWords = 4;
     static constexpr std::uint32_t kBytes = kWords * sizeof(std::uint32_t);
     using Record = std::array<std::uint32_t, kWords>;
