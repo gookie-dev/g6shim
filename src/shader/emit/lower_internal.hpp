@@ -141,7 +141,7 @@ private:
     static std::optional<std::pair<std::uint8_t, bool>> sdwa_src(const IrInst& inst, std::size_t k);
     V select_bits(V x, std::uint8_t sel, bool sext);
     V fsrc(const IrInst& inst, std::size_t k);
-    V src(const IrInst& inst, std::size_t k);
+    V src(const IrInst& inst, std::size_t k, std::optional<std::uint32_t> mask = std::nullopt);
     V unary(std::uint32_t op, V f);
     V binary(std::uint32_t op, V a, V b);
     V fmad(V a, V b, V c);

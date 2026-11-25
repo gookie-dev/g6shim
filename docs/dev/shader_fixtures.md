@@ -38,7 +38,7 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `image_sample_bias_a16.s` is a pixel shader with a dedicated register for the half-precision bias and a non-sequential address register for the two packed half-precision coordinates.
 
-`image_shape_only.s` reads the split width bits of an image descriptor without using it in an image instruction. The negative case shifts in an additional unavailable bit.
+`image_shape_only.s` reads the split width bits of an image descriptor without using it in an image instruction. It also joins the two masked words with a constant bit alignment. The negative cases ask for an unavailable bit or use a variable alignment that needs both full words.
 
 `sampler_lod_data.s` reads and compares the LOD word of the second sampler heap slot without sampling an image.
 

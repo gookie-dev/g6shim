@@ -242,6 +242,20 @@ TEST(shader_fixtures_translate_image_dimensions_without_an_image_operation) {
                    std::string_view::npos;
     }
     CHECK(rejected);
+
+    Fixture variable = *fixture;
+    const auto alignment = std::find(variable.words.begin(), variable.words.end(), 0x0278'120Au);
+    CHECK(alignment != variable.words.end());
+    if (alignment == variable.words.end()) return;
+    *alignment &= ~(0x1FFu << 18);
+    rejected = false;
+    try {
+        (void)lower_fixture(variable, {input, output});
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("a descriptor's address or format read as data") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
 }
 
 TEST(shader_fixtures_translate_sampler_lod_data) {

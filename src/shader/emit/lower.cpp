@@ -1288,7 +1288,7 @@ V Lower::fsrc(const IrInst& inst, std::size_t k) {
     return f;
 }
 
-V Lower::src(const IrInst& inst, std::size_t k) {
+V Lower::src(const IrInst& inst, std::size_t k, std::optional<std::uint32_t> mask) {
     const auto* valu = std::get_if<Valu>(&inst.fields);
     if (valu == nullptr) std::abort();
     if (k >= valu->src.size()) fail("a missing operand");
@@ -1296,8 +1296,15 @@ V Lower::src(const IrInst& inst, std::size_t k) {
     if ((valu->abs >> k & 1) != 0 || (valu->neg >> k & 1) != 0)
         fail("integer operand modifiers");
     if (src0_ && k == 0) return *src0_;
-    const V x = operand(inst, op);
     const std::optional<std::pair<std::uint8_t, bool>> selected = sdwa_src(inst, k);
+    if (mask && !selected) {
+        if (*mask == 0) return s_.m.i32(0);
+        if (const auto* scalar = std::get_if<ScalarOperand>(&op)) {
+            const auto value = inst.read(Reg::s(scalar->code));
+            if (value && has_partial_descriptor(*value)) return masked_descriptor_value(*value, *mask);
+        }
+    }
+    const V x = operand(inst, op);
     if (selected) return select_bits(x, selected->first, selected->second);
     return x;
 }

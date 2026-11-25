@@ -874,7 +874,9 @@ void Lower::standalone_descriptor_data(const IrInst& inst, Site site, std::uint8
         else if (resource_words == 8 && word == kImageDimensionsWord)
             source = SourceKind::ImageDimensions;
         if (source) {
-            descriptor_addresses_[*value] = {0, root.slot, root.root, descriptor_dword, *source};
+            const UserData data{0, root.slot, root.root, descriptor_dword, *source};
+            descriptor_addresses_[*value] = data;
+            if (data.known_bits() != UINT32_MAX) vals_[*value] = Val::missing(kDescriptorData);
         } else {
             vals_[*value] = Val::missing(kStandaloneDescriptorData);
         }

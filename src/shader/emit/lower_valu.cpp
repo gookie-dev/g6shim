@@ -1312,11 +1312,20 @@ V Lower::integer(const IrInst& inst, std::string_view name) {
         return mul_hi(a, b, name == "v_mul_hi_i32");
     }
     if (name == "v_alignbit_b32" || name == "v_alignbyte_b32") {
-        const V a = src(inst, 0);
-        const V b = src(inst, 1);
         const V sh = src(inst, 2);
+        const bool byte_shift = name == "v_alignbyte_b32";
+        std::optional<std::uint32_t> high_mask;
+        std::optional<std::uint32_t> low_mask;
+        if (const auto amount = s_.m.int_value(sh)) {
+            const auto value = static_cast<std::uint32_t>(*amount);
+            const std::uint32_t bits = byte_shift ? (value & 3u) * 8u : value & 31u;
+            high_mask = bits == 0 ? 0u : UINT32_MAX >> (32u - bits);
+            low_mask = UINT32_MAX << bits;
+        }
+        const V a = src(inst, 0, high_mask);
+        const V b = src(inst, 1, low_mask);
         V shift;
-        if (name == "v_alignbyte_b32") {
+        if (byte_shift) {
             const V three = k(3);
             const V t = s_.m.bin(c, Bin::And, sh, three);
             shift = s_.m.bin(c, Bin::Shl, t, k(3));
