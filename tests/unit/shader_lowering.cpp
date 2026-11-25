@@ -59,8 +59,8 @@ Lowered lower_native(const NativeProgram& native, const std::vector<SigElement>&
                      const std::vector<SigElement>& outputs) {
     const Program program = ::g6shim::shader::build(native.patched_code(), native.wave64, native.vgprs);
     const Structured structured = structure(program);
-    const Resources resources = track(program, native.layout, native.stage, &structured);
     const Io raised = raise(program, native);
+    const Resources resources = track(program, native.layout, native.stage, &structured, raised.ring_address_loads);
     Parts parts;
     parts.native = &native;
     parts.p = &program;

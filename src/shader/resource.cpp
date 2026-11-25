@@ -1413,7 +1413,7 @@ bool operator==(const Source& a, const Source& b) {
 }
 
 Resources track(const Program& program, const std::vector<RootParam>& layout, HwStage stage,
-                const Structured* lanes) {
+                const Structured* lanes, std::span<const Site> ring_address_loads) {
     const Tracer tracer(program, layout, stage, lanes);
     Resources out;
     for (const auto& entry : program.inputs) {
@@ -1458,6 +1458,9 @@ Resources track(const Program& program, const std::vector<RootParam>& layout, Hw
                         descriptor(smem->base, Role::Resource);
                     } else if (name.find("_load_") != std::string_view::npos ||
                                name.find("_store_") != std::string_view::npos) {
+                        if (stage == HwStage::Gs && name == "s_load_dword" &&
+                            std::binary_search(ring_address_loads.begin(), ring_address_loads.end(), site))
+                            continue;
                         out.scalar.emplace_back(
                             site, tracer.smem_address(inst, smem->base, smem->offset, smem->soffset));
                     }

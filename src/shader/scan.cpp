@@ -181,8 +181,10 @@ std::optional<ShaderKind> header_kind(std::span<const std::uint8_t> part) {
 std::vector<std::uint8_t> translate_program(const Container& container, const NativeProgram& native) {
     const Program program = build(native.patched_code(), native.wave64, native.vgprs);
     const Structured structured = structure(program);
-    const Resources resources = track(program, native.layout, native.stage, &structured);
-    const Io io = raise(program, native);
+    Io io;
+    if (native.stage == HwStage::Gs) io = raise(program, native);
+    const Resources resources = track(program, native.layout, native.stage, &structured, io.ring_address_loads);
+    if (native.stage != HwStage::Gs) io = raise(program, native);
     emit::HostShader shader = emit::emit(container, native, program, structured, io, resources);
     return std::move(shader.dxil);
 }

@@ -73,9 +73,9 @@ A geometry program is a merged export/geometry stage on local-data-share rings, 
 
 On entry only `v0` and `v1` are live. They hold packed 16-bit input-vertex offsets, unpacked with word selects (`WORD_0` of `v0`, `WORD_1` of `v0`, `WORD_0` of `v1` are vertices 0, 1 and 2). `v2`-`v4` are not live.
 
-Export-shader outputs are read from local data share at those vertex offsets (`ds_read2_b32` and `ds_read_b32`). Each signature register is 4 dwords, so register `n` starts 16 bytes after the vertex base. The input primitive is a triangle.
+Export-shader outputs are read from local data share at those vertex offsets (`ds_read2_b32` and `ds_read_b32`). A packed offset may be multiplied by four with a word-select shift or with a shift and low-word mask. Each signature register is 4 dwords, so register `n` starts 16 bytes after the vertex base. The input primitive is a triangle.
 
-Emitted vertices are written with `ds_write*` into the geometry-to-vertex area. The instruction offset selects the output register; the vector address is a per-lane base and is not part of the slot. Output is a triangle strip on stream 0.
+Emitted vertices are written with `ds_write*` into the geometry-to-vertex area. The instruction offset selects the output register; the vector address is a per-lane base and is not part of the slot. A scalar dword load can be omitted if its result feeds only the address arithmetic for these output writes. A result used as output data, a control condition, or a different memory operand still needs a mapped scalar address. Output is a triangle strip on stream 0.
 
 `s_sendmsg` `MSG_GS` with `GS_OP_EMIT` emits the vertex, `GS_OP_CUT` ends the strip, and `GS_OP_EMIT_CUT` does both. The program finishes with `MSG_GS_DONE` and `GS_OP_NOP`.
 

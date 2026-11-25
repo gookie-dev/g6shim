@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <tuple>
 #include <vector>
 
@@ -105,7 +106,7 @@ struct Resources {
 struct Structured;
 
 Resources track(const Program& program, const std::vector<RootParam>& layout, HwStage stage,
-                const Structured* lanes);
+                const Structured* lanes, std::span<const Site> ring_address_loads = {});
 
 std::optional<std::uint32_t> inline_constant(std::uint8_t code);
 

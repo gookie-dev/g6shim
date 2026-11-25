@@ -6,14 +6,17 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <iterator>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "g6shim/shader/dxbc.hpp"
@@ -27,12 +30,13 @@ using namespace g6shim::shader::emit;
 using g6shim::test::lowering::check_dxil;
 
 constexpr std::uint32_t kGsWords[] = {
-    0xbe800383, 0x92828000, 0x85fe8002, 0x7e0402f9, 0x00040600, 0x7e0602f9, 0x00050600, 0x7e0802f9,
-    0x00040601, 0xd8d80010, 0x05000002, 0x7e0c02f1, 0x7e0e02f1, 0x7e100280, 0x7e1202f2, 0xd8380100,
-    0x00070602, 0xd8380302, 0x00090802, 0xd8340010, 0x00000502, 0xbf900022, 0x7e0c02f0, 0xd8380100,
-    0x00070602, 0xd8380302, 0x00090802, 0xd8340010, 0x00000502, 0xbf900022, 0x7e0c0280, 0x7e0e02f0,
-    0xd8380100, 0x00070602, 0xd8380302, 0x00090802, 0xd8340010, 0x00000502, 0xbf900022, 0xbf900012,
-    0xbf900003, 0xbf810000,
+    0xbe800383, 0x92828000, 0x85fe8002, 0x34040082, 0x360404ff, 0x0003fffc, 0xbe810382, 0x340600f9,
+    0x05860601, 0x7e0802f9, 0x00040601, 0xd8d80010, 0x05000002, 0xd8d80010, 0x0a000003, 0xf4000104,
+    0xfa000000, 0x8f048204, 0x81048404, 0xd543000b, 0x040a0404, 0x7e0c02f1, 0x7e0e02f1, 0x7e100280,
+    0x7e1202f2, 0xd8380100, 0x0007060b, 0xd8380302, 0x0009080b, 0xd8340010, 0x0000050b, 0xbf900022,
+    0x7e0c02f0, 0xd8380100, 0x0007060b, 0xd8380302, 0x0009080b, 0xd8340010, 0x0000050b, 0xbf900022,
+    0x7e0c0280, 0x7e0e02f0, 0xd8380100, 0x0007060b, 0xd8380302, 0x0009080b, 0xd8340010, 0x0000050b,
+    0xbf900022, 0xbf900012, 0xbf900003, 0xbf810000,
 };
 constexpr std::uint32_t kTarget = 16;
 constexpr std::uint32_t kCentre = 8;
@@ -93,13 +97,13 @@ std::vector<std::uint8_t> zlib_stored(std::span<const std::uint8_t> data) {
     return out;
 }
 
-std::vector<std::uint8_t> geometry_container() {
+std::vector<std::uint8_t> geometry_container(std::span<const std::uint32_t> words = kGsWords) {
     constexpr std::size_t kStageData = 0x14C + 8 * (4 + 10 * 10 * 4);
     constexpr std::size_t kRecord = 0x54;
     constexpr std::uint64_t kAbsent = 0xDEADBEEFDEADBEEFull;
     std::vector<std::uint8_t> code;
-    code.reserve(sizeof kGsWords);
-    for (const std::uint32_t word : kGsWords) append_u32(code, word);
+    code.reserve(words.size_bytes());
+    for (const std::uint32_t word : words) append_u32(code, word);
     std::vector<std::uint8_t> payload;
     append_u64(payload, 6);
     payload.resize(0x68, 0);
@@ -488,4 +492,22 @@ TEST(geometry_shader_emits_a_triangle_on_warp) {
         return;
     }
     CHECK(red >= kRed);
+}
+
+TEST(geometry_shader_rejects_an_untracked_load_used_as_output_data) {
+    constexpr std::uint32_t kStorePositionPair = 0x0007060b;
+    constexpr std::uint32_t kStoreAddressAsPosition = 0x00070b0b;
+    std::vector<std::uint32_t> words(std::begin(kGsWords), std::end(kGsWords));
+    const auto store = std::find(words.begin(), words.end(), kStorePositionPair);
+    CHECK(store != words.end());
+    if (store == words.end()) return;
+    *store = kStoreAddressAsPosition;
+    bool rejected = false;
+    try {
+        (void)translate(geometry_container(words));
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("an address in an SGPR that is no root parameter") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
 }

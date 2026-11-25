@@ -180,9 +180,11 @@ HostShader translate(std::span<const std::uint8_t> container) {
     } catch (...) {
         structure_failure = std::current_exception();
     }
-    const Resources resources =
-        track(program, native->layout, native->stage, structured ? &*structured : nullptr);
-    const Io io = raise(program, *native);
+    Io io;
+    if (native->stage == HwStage::Gs) io = raise(program, *native);
+    const Resources resources = track(program, native->layout, native->stage, structured ? &*structured : nullptr,
+                                      io.ring_address_loads);
+    if (native->stage != HwStage::Gs) io = raise(program, *native);
     if (!structured) std::rethrow_exception(structure_failure);
     return emit(parsed, *native, program, *structured, io, resources);
 }

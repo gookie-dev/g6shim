@@ -11,6 +11,7 @@
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -151,6 +152,8 @@ constexpr std::uint8_t kWord0 = 4;
 constexpr std::uint8_t kWord1 = 5;
 constexpr std::uint8_t kDwordSelect = 6;
 constexpr std::uint32_t kMaxRingDwords = 128;
+constexpr std::int32_t kPackedVertexMask = 0xffff;
+constexpr std::int32_t kDwordByteShift = 2;
 
 struct Disp {
     std::optional<std::uint8_t> vertex;
@@ -175,7 +178,69 @@ std::optional<Value> vector_value(const Inst& inst, const Operand& op) {
     return inst.read(Reg::v(vector->reg));
 }
 
-void raise_rings(const Program& program, const std::unordered_map<Value, Site, ValueHash>& defs, Io& io) {
+bool ring_address_arithmetic(const Inst& inst) {
+    const std::string_view name = inst.name();
+    if (name != "s_lshl_b32" && name != "s_add_i32" && name != "s_add_u32" && name != "s_mov_b32" &&
+        name != "v_mad_u32_u24" && name != "v_add_nc_u32" && name != "v_mov_b32")
+        return false;
+    return std::none_of(inst.writes.begin(), inst.writes.end(), [](const auto& entry) {
+        return entry.first.kind == Reg::Kind::S && entry.first.code >= kVcc;
+    });
+}
+
+void find_ring_address_loads(const Program& program, const std::unordered_map<Value, Site, ValueHash>& defs,
+                             const std::unordered_map<Value, Site, ValueHash>& phis,
+                             const std::unordered_map<Site, Value, SiteHash>& ring_addresses, Io& io) {
+    if (ring_addresses.empty()) return;
+    const auto at = [&](Site site) -> const Inst& { return program.blocks[site.block].insts[site.index]; };
+    const auto dependencies = [&](std::vector<Value> pending) {
+        std::unordered_set<Value, ValueHash> seen;
+        while (!pending.empty()) {
+            const Value value = pending.back();
+            pending.pop_back();
+            if (!seen.insert(value).second) continue;
+            const auto phi = phis.find(value);
+            if (phi != phis.end()) {
+                const auto& args = program.blocks[phi->second.block].phis[phi->second.index].args;
+                pending.insert(pending.end(), args.begin(), args.end());
+            }
+            const auto def = defs.find(value);
+            if (def == defs.end()) continue;
+            const Inst& inst = at(def->second);
+            if (!ring_address_arithmetic(inst)) continue;
+            for (const auto& read : inst.reads) pending.push_back(read.second);
+        }
+        return seen;
+    };
+
+    std::vector<Value> observed;
+    for (std::size_t b = 0; b < program.blocks.size(); ++b) {
+        const Block& block = program.blocks[b];
+        for (std::size_t i = 0; i < block.insts.size(); ++i) {
+            const Inst& inst = block.insts[i];
+            if (ring_address_arithmetic(inst)) continue;
+            const auto address = ring_addresses.find(Site{b, i});
+            for (const auto& read : inst.reads)
+                if (address == ring_addresses.end() || read.second != address->second)
+                    observed.push_back(read.second);
+        }
+    }
+    std::vector<Value> addresses;
+    for (const auto& entry : ring_addresses) addresses.push_back(entry.second);
+    const auto live = dependencies(std::move(observed));
+    for (Value value : dependencies(std::move(addresses))) {
+        if (live.contains(value)) continue;
+        const auto def = defs.find(value);
+        if (def == defs.end()) continue;
+        const Inst& inst = at(def->second);
+        if (inst.name() == "s_load_dword" && inst.writes.size() == 1)
+            io.ring_address_loads.push_back(def->second);
+    }
+    std::sort(io.ring_address_loads.begin(), io.ring_address_loads.end());
+}
+
+void raise_rings(const Program& program, const std::unordered_map<Value, Site, ValueHash>& defs,
+                 const std::unordered_map<Value, Site, ValueHash>& phis, Io& io) {
     std::unordered_map<Value, std::uint8_t, ValueHash> packs;
     for (const auto& entry : program.inputs) {
         if (entry.first == Reg::v(0)) packs.emplace(entry.second, std::uint8_t{0});
@@ -183,6 +248,33 @@ void raise_rings(const Program& program, const std::unordered_map<Value, Site, V
     }
     std::unordered_map<Value, std::uint8_t, ValueHash> bases;
     const auto at = [&](Site site) -> const Inst& { return program.blocks[site.block].insts[site.index]; };
+    const auto unmodified = [](const Valu& op) {
+        return !op.sdwa && !op.dpp && op.abs == 0 && op.neg == 0 && !op.clamp && op.omod == 0;
+    };
+    const auto scalar_immediate = [&](const Inst& inst, const Operand& operand) -> std::optional<std::int32_t> {
+        if (const auto direct = immediate(operand)) return direct;
+        const auto* reg = std::get_if<ScalarOperand>(&operand);
+        const auto value = reg ? inst.read(Reg::s(reg->code)) : std::nullopt;
+        if (!value) return std::nullopt;
+        const auto def = defs.find(*value);
+        if (def == defs.end()) return std::nullopt;
+        const Inst& move = at(def->second);
+        const auto* sop = std::get_if<SopFields>(&move.fields);
+        if (move.name() != "s_mov_b32" || sop == nullptr || sop->src.size() != 1) return std::nullopt;
+        return immediate(sop->src.front());
+    };
+    const auto packed_low = [&](Value value, std::int32_t mask) -> std::optional<Value> {
+        if (mask == kPackedVertexMask) return value;
+        if (mask != kPackedVertexMask << kDwordByteShift) return std::nullopt;
+        const auto def = defs.find(value);
+        if (def == defs.end()) return std::nullopt;
+        const Inst& shift = at(def->second);
+        const auto* op = std::get_if<Valu>(&shift.fields);
+        if (shift.name() != "v_lshlrev_b32" || op == nullptr || op->src.size() != 2 || !unmodified(*op) ||
+            immediate(op->src[0]) != kDwordByteShift)
+            return std::nullopt;
+        return vector_value(shift, op->src[1]);
+    };
     for (const Block& block : program.blocks) {
         for (const Inst& inst : block.insts) {
             const auto* valu = std::get_if<Valu>(&inst.fields);
@@ -191,22 +283,27 @@ void raise_rings(const Program& program, const std::unordered_map<Value, Site, V
             if (dst == nullptr) continue;
             const std::optional<Value> written = inst.write(Reg::v(dst->reg));
             if (!written) continue;
-            if (valu->sdwa && valu->sdwa->dst_sel == kDwordSelect && !valu->sdwa->src_sel.empty()) {
-                const std::optional<Value> src = vector_value(inst, valu->src[0]);
-                const std::uint8_t sel = valu->sdwa->src_sel[0];
+            if (valu->sdwa && valu->sdwa->dst_sel == kDwordSelect && valu->sdwa->sext == 0 &&
+                valu->abs == 0 && valu->neg == 0 && !valu->clamp && valu->omod == 0) {
+                const bool packed_shift = inst.name() == "v_lshlrev_b32" && valu->src.size() == 2 &&
+                                          valu->sdwa->src_sel[0] == kDwordSelect &&
+                                          scalar_immediate(inst, valu->src[0]) == kDwordByteShift;
+                const std::size_t packed_operand = packed_shift ? 1 : 0;
+                const std::optional<Value> src = vector_value(inst, valu->src[packed_operand]);
+                const std::uint8_t sel = valu->sdwa->src_sel[packed_operand];
                 if (src && (sel == kWord0 || sel == kWord1)) {
                     const auto pack = packs.find(*src);
-                    if (pack != packs.end())
+                    if (pack != packs.end() && (inst.name() == "v_mov_b32" || packed_shift))
                         bases.emplace(*written, static_cast<std::uint8_t>(pack->second * 2 + (sel == kWord1 ? 1 : 0)));
                 }
             }
-            if (inst.name() == "v_and_b32" && valu->src.size() > 1) {
-                const std::optional<Value> src = vector_value(inst, valu->src[0]);
-                const std::optional<std::int32_t> mask = immediate(valu->src[1]);
-                if (src && mask && *mask == static_cast<std::int32_t>(0xFFFF)) {
-                    const auto pack = packs.find(*src);
-                    if (pack != packs.end()) bases.emplace(*written, static_cast<std::uint8_t>(pack->second * 2));
-                }
+            if (inst.name() == "v_and_b32" && valu->src.size() == 2 && unmodified(*valu)) {
+                const std::size_t mask_operand = immediate(valu->src[0]) ? 0 : 1;
+                const auto mask = immediate(valu->src[mask_operand]);
+                const auto src = vector_value(inst, valu->src[1 - mask_operand]);
+                const auto low = src && mask ? packed_low(*src, *mask) : std::nullopt;
+                const auto pack = low ? packs.find(*low) : packs.end();
+                if (pack != packs.end()) bases.emplace(*written, static_cast<std::uint8_t>(pack->second * 2));
             }
             if (inst.name() == "v_lshrrev_b32" && valu->src.size() > 1) {
                 const std::optional<std::int32_t> shift = immediate(valu->src[0]);
@@ -292,6 +389,7 @@ void raise_rings(const Program& program, const std::unordered_map<Value, Site, V
         }
         return out;
     };
+    std::unordered_map<Site, Value, SiteHash> ring_addresses;
     for (std::size_t b = 0; b < program.blocks.size(); ++b) {
         const Block& block = program.blocks[b];
         for (std::size_t i = 0; i < block.insts.size(); ++i) {
@@ -315,6 +413,7 @@ void raise_rings(const Program& program, const std::unordered_map<Value, Site, V
             const Disp disp = displacement(*addr, 0);
             if (!disp.known) detail::fail_unsupported(inst.machine.offset, "a geometry ring address");
             if (read && !disp.vertex) detail::fail_unsupported(inst.machine.offset, "a geometry ring read");
+            bool address_is_data = false;
             std::uint8_t cursor = 0;
             if (read) {
                 if (!fields->dst) detail::fail_unsupported(inst.machine.offset, "a geometry ring read");
@@ -347,12 +446,15 @@ void raise_rings(const Program& program, const std::unordered_map<Value, Site, V
                         store.site = site;
                         store.vgpr = static_cast<std::uint8_t>(data->reg + k);
                         store.dword = dword;
+                        address_is_data |= inst.read(Reg::v(store.vgpr)) == addr;
                         io.ring_stores.push_back(store);
                     }
                 }
             }
+            if (write && !address_is_data) ring_addresses.emplace(site, *addr);
         }
     }
+    find_ring_address_loads(program, defs, phis, ring_addresses, io);
 }
 
 }  // namespace
@@ -570,7 +672,7 @@ Io raise(const Program& program, const NativeProgram& native) {
             for (const auto& entry : block.insts[i].writes) defs[entry.second] = Site{b, i};
         for (std::size_t i = 0; i < block.phis.size(); ++i) phis[block.phis[i].value] = Site{b, i};
     }
-    if (native.stage == HwStage::Gs) raise_rings(program, defs, io);
+    if (native.stage == HwStage::Gs) raise_rings(program, defs, phis, io);
     const Halves halves(program, defs, phis);
 
     for (std::size_t b = 0; b < program.blocks.size(); ++b) {

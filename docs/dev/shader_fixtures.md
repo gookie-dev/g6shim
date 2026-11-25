@@ -2,7 +2,7 @@
 
 `tests/gfx10/*.s` are small hand-written GFX10 compute programs, one translator rule each. `tests/unit/gfx10_fixtures.inc` holds their assembled words. `shader_fixtures_translate_and_validate` lowers every program to DXIL and checks the container with the DXIL validator, so neither CI nor contributors need LLVM.
 
-`tests/gfx10/gs/*.s` are geometry programs, not part of that compute suite. `gs_emit.s` is a wave64 legacy geometry shader: an `s_bfm_b64` / `s_cselect_b64` prologue, word-select unpack of `v0` and `v1`, a ring read, ring writes and `s_sendmsg` emit/cut. Its words are in `tests/unit/shader_geometry_test.cpp`. Regenerate them with the same `llvm-mc` invocation (`-triple=amdgcn-amd-amdpal -mcpu=gfx1030`) and copy the `.text` dwords.
+`tests/gfx10/gs/*.s` are geometry programs, not part of that compute suite. `gs_emit.s` is a wave64 legacy geometry shader with an `s_bfm_b64` / `s_cselect_b64` prologue, packed vertex byte offsets, ring reads and writes, and `s_sendmsg` emit/cut. The ring write base uses a scalar load absent from the root layout. A test also uses the base as vertex data and checks that translation rejects the untracked load. The fixture words are in `tests/unit/shader_geometry_test.cpp`. Regenerate them with the same `llvm-mc` invocation (`-triple=amdgcn-amd-amdpal -mcpu=gfx1030`) and copy the `.text` dwords.
 
 ## Program shape
 
