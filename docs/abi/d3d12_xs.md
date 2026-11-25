@@ -95,6 +95,8 @@ The host can supply word 2 from an aligned table slot even when the shader never
 
 Image base-address words in fixed table slots use the same binding path. The source is the texture's title-facing memory address or the explicit address in a placed view. The image descriptor stores the base in units of 256 bytes.
 
+Fixed shader-resource views of two-dimensional textures expose width minus one across words 1 and 2 and height minus one in word 2. These fields use the underlying mip-zero dimensions, including views that start at a later mip. The translator accepts masks that use only these dimension bits.
+
 Word 5 of the eight-word image descriptor has reserved zero bits at 31:24. Checked two-dimensional shader-resource views use value 4 for the sampling performance field at bits 22:20 and zero for the LOD-warning field at bits 19:8, as observed in synthetic SDK-created views across color formats, mip clamps and resource flags. An unbound view supplies zero.
 
 Word 7 of an eight-word shader-resource image descriptor from a shim table or resource heap is zero. It holds compression metadata address bits, and the title-facing texture layout allocates no compression metadata plane. The PC driver manages any metadata for its own texture separately.

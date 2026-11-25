@@ -44,6 +44,7 @@ constexpr std::string_view kScalarRawHighWord = "scalar_raw_buffer_high_word";
 constexpr std::string_view kScalarTypedFormat = "scalar_typed_buffer_format";
 constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 constexpr std::string_view kImageSampleBiasA16 = "image_sample_bias_a16";
+constexpr std::string_view kImageShapeOnly = "image_shape_only";
 constexpr std::string_view kPackedInputPartner = "packed_input_partner";
 constexpr std::string_view kSelectReadLaneMask = "select_readlane_mask";
 
@@ -70,7 +71,8 @@ TEST(shader_fixtures_translate_and_validate) {
             fixture.name == kScalarRawHighWord || fixture.name == kScalarTypedFormat ||
             fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords ||
             fixture.name == kImageSampleBiasA16 || fixture.name == kScalarBufferCountOnly ||
-            fixture.name == kPackedInputPartner || fixture.name == kSelectReadLaneMask)
+            fixture.name == kPackedInputPartner || fixture.name == kSelectReadLaneMask ||
+            fixture.name == kImageShapeOnly)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -200,6 +202,45 @@ TEST(shader_fixtures_translate_a_select_on_raw_lane_bits) {
             CHECK(false);
         }
     }
+}
+
+TEST(shader_fixtures_translate_image_dimensions_without_an_image_operation) {
+    const Fixture* fixture = find_fixture(kImageShapeOnly);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    UsedResource input = used_uav(kTableUserData, kTableSlot);
+    input.kind.kind = ResourceType::Kind::Srv;
+    input.dwords = 8;
+    UsedResource output = used_uav(kTableUserData, kTableSlot);
+    output.table_offset_dwords = kSecondDescriptorDword;
+    try {
+        const auto lowered = lower_fixture(*fixture, {input, output});
+        using Source = UserData::Source;
+        for (const auto source : {Source::ImageWidthLowBits, Source::ImageDimensions}) {
+            const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(),
+                [source](const UserData& entry) { return entry.source == source; });
+            CHECK(field != lowered.user_data.end());
+            if (field != lowered.user_data.end()) CHECK(field->dword == 0);
+        }
+        check_dxil(lowered.dxil, fixture->name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
+    }
+
+    Fixture unknown = *fixture;
+    const auto shift = std::find(unknown.words.begin(), unknown.words.end(), 0x9006'9E09u);
+    CHECK(shift != unknown.words.end());
+    if (shift == unknown.words.end()) return;
+    *shift = 0x9006'9D09u;
+    bool rejected = false;
+    try {
+        (void)lower_fixture(unknown, {input, output});
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("a descriptor's address or format read as data") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
 }
 
 TEST(shader_fixtures_translate_a_buffer_count_without_using_the_view) {

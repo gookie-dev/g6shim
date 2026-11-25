@@ -21,6 +21,8 @@ constexpr std::uint64_t kCodeCbvSize = 0x1'0000;
 constexpr std::pair<std::uint32_t, std::uint32_t> kRawBufferSrv{11, 0};
 constexpr std::uint32_t kResourceDescriptorBytes = 32;
 constexpr std::uint32_t kBufferRecordCountWord = 2;
+constexpr std::uint32_t kImageWidthLowWord = 1;
+constexpr std::uint32_t kImageDimensionsWord = 2;
 constexpr std::uint32_t kImageWord5ReservedMask = 0xff00'0000;
 constexpr Why kDescriptorData = "a descriptor's address or format read as data";
 constexpr Why kStandaloneDescriptorData = "a descriptor read only as data";
@@ -425,12 +427,19 @@ void Lower::sop(const IrInst& inst) {
         if (name == "s_nand_b32" || name == "s_nor_b32" || name == "s_xnor_b32")
             r = s_.m.bin(c, Bin::Xor, r, ones);
     } else if (name == "s_lshl_b32" || name == "s_lshr_b32" || name == "s_ashr_i32") {
-        const V a = src32(0);
+        const auto shift = src.size() > 1 ? operand_constant(src[1]) : std::nullopt;
+        const bool left = name == "s_lshl_b32";
+        std::optional<std::uint32_t> mask;
+        if (shift) {
+            const std::uint32_t bits = *shift & 31u;
+            mask = left ? UINT32_MAX >> bits : UINT32_MAX << bits;
+        }
+        const V a = src32(0, mask);
         V b = src32(1);
         const V k31 = s_.m.i32(31);
         b = s_.m.bin(c, Bin::And, b, k31);
         Bin op = Bin::AShr;
-        if (name == "s_lshl_b32") op = Bin::Shl;
+        if (left) op = Bin::Shl;
         else if (name == "s_lshr_b32") op = Bin::LShr;
         r = s_.m.bin(c, op, a, b);
     } else if (name == "s_lshl1_add_u32" || name == "s_lshl2_add_u32" ||
@@ -655,7 +664,7 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
         if (use_at) break;
     }
     if (!use_at) {
-        standalone_buffer_count(inst, site, code, count);
+        standalone_descriptor_data(inst, site, code, count);
         return;
     }
     const Site at = use_at->first;
@@ -827,7 +836,7 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
     }
 }
 
-void Lower::standalone_buffer_count(const IrInst& inst, Site site, std::uint8_t code, std::uint32_t count) {
+void Lower::standalone_descriptor_data(const IrInst& inst, Site site, std::uint8_t code, std::uint32_t count) {
     constexpr std::uint32_t kDwordBytes = sizeof(std::uint32_t);
     constexpr std::uint32_t kSlotDwords = kResourceDescriptorBytes / kDwordBytes;
     const auto tracked = scalar_.find(site);
@@ -840,16 +849,23 @@ void Lower::standalone_buffer_count(const IrInst& inst, Site site, std::uint8_t 
     const std::uint32_t first = dword % kSlotDwords;
     const std::uint32_t slot_dword = dword - first;
     const UsedResource* used = used_kind(Source::loaded(site, 0));
-    if (used == nullptr || used->kind.kind != ResourceType::Kind::Srv || used->dwords != 4 ||
-        used->table_offset_dwords != slot_dword || root.root.kind != RootType::Kind::Table ||
-        first > kBufferRecordCountWord || kBufferRecordCountWord - first >= count)
+    if (used == nullptr || used->kind.kind != ResourceType::Kind::Srv ||
+        used->table_offset_dwords != slot_dword || root.root.kind != RootType::Kind::Table)
         fail(kStandaloneDescriptorData);
+    using SourceKind = UserData::Source;
     for (std::uint32_t k = 0; k < count; ++k) {
         const auto value = inst.write(Reg::s(static_cast<std::uint8_t>(code + k)));
         if (!value) continue;
-        if (first + k == kBufferRecordCountWord) {
-            descriptor_addresses_[*value] = {0, root.slot, root.root, slot_dword,
-                                             UserData::Source::ShaderBufferRecordCount};
+        const std::uint32_t word = first + k;
+        std::optional<SourceKind> source;
+        if (used->dwords == 4 && word == kBufferRecordCountWord)
+            source = SourceKind::ShaderBufferRecordCount;
+        else if (used->dwords == 8 && word == kImageWidthLowWord)
+            source = SourceKind::ImageWidthLowBits;
+        else if (used->dwords == 8 && word == kImageDimensionsWord)
+            source = SourceKind::ImageDimensions;
+        if (source) {
+            descriptor_addresses_[*value] = {0, root.slot, root.root, slot_dword, *source};
         } else {
             vals_[*value] = Val::missing(kStandaloneDescriptorData);
         }

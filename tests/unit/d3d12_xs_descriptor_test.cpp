@@ -232,6 +232,7 @@ TEST(d3d12_xs_table_image_address_uses_the_title_base) {
     srv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MostDetailedMip = 1;
     srv.Texture2D.MipLevels = 1;
     std::array<std::uint32_t, 16> words{};
     std::memcpy(words.data(), &srv, sizeof srv);
@@ -241,7 +242,7 @@ TEST(d3d12_xs_table_image_address_uses_the_title_base) {
     texture.width = 16;
     texture.height = 16;
     texture.depth_or_array_size = 1;
-    texture.mip_levels = 1;
+    texture.mip_levels = 3;
     texture.format = DXGI_FORMAT_R8G8B8A8_UNORM;
     texture.sample_count = 1;
     std::array<std::uint32_t, 14> resource_words{};
@@ -253,6 +254,12 @@ TEST(d3d12_xs_table_image_address_uses_the_title_base) {
     CHECK(descriptor_host::table_image_base_word(heap, heap.start, kSlotDwords) == 0x3456'789Au);
     CHECK(descriptor_host::table_image_base_word(heap, heap.start, 2 * kSlotDwords) == 0u);
     CHECK(!descriptor_host::table_image_base_word(heap, heap.start, 3 * kSlotDwords));
+    using descriptor_host::table_image_dimensions;
+    constexpr std::array kDimensions{0xC000'0000u, 0x0003'C003u};
+    CHECK(table_image_dimensions(heap, heap.start, kSlotDwords) == kDimensions);
+    CHECK((table_image_dimensions(heap, heap.start, 2 * kSlotDwords) == std::array{0u, 0u}));
+    CHECK(!table_image_dimensions(heap, heap.start, kSlotDwords + 1));
+    CHECK(!table_image_dimensions(heap, heap.start, 3 * kSlotDwords));
     using descriptor_host::table_image_sampling_fields;
     CHECK(table_image_sampling_fields(heap, heap.start, kSlotDwords) == 0x0040'0000u);
     CHECK(table_image_sampling_fields(heap, heap.start, 2 * kSlotDwords) == 0u);
@@ -261,6 +268,7 @@ TEST(d3d12_xs_table_image_address_uses_the_title_base) {
     descriptor::create_placed_srv(nullptr, resource_words.data(), words.data(), heap.start + step);
     CHECK(!descriptor_host::table_image_base_word(heap, heap.start, kSlotDwords));
     CHECK(!table_image_sampling_fields(heap, heap.start, kSlotDwords));
+    CHECK(!table_image_dimensions(heap, heap.start, kSlotDwords));
     resource_words[0] = D3D12_RESOURCE_DIMENSION_BUFFER;
     --words[10];
     descriptor::create_placed_srv(nullptr, resource_words.data(), words.data(), heap.start + step);
@@ -278,6 +286,7 @@ TEST(d3d12_xs_table_image_address_uses_the_title_base) {
             descriptor::create_srv(nullptr, image, words.data(), heap.start);
             CHECK(descriptor_host::table_image_base_word(heap, heap.start, 0) ==
                   static_cast<std::uint32_t>(reinterpret_cast<std::uint64_t>(memory->first) >> 8));
+            CHECK(table_image_dimensions(heap, heap.start, 0) == kDimensions);
         }
         release(image);
     }

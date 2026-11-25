@@ -38,6 +38,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `image_sample_bias_a16.s` is a pixel shader with a dedicated register for the half-precision bias and a non-sequential address register for the two packed half-precision coordinates.
 
+`image_shape_only.s` reads the split width bits of an image descriptor without using it in an image instruction. The negative case shifts in an additional unavailable bit.
+
 `packed_input_partner.s` interpolates the high half of the third packed component. Its two half-precision signature rows share one hardware attribute. The cases cover an adjacent partner, a unique partner beyond a separate input, and rejection when no eligible partner exists.
 
 `select_readlane_mask.s` reads mask words back from two vector lanes and then uses them for a conditional select. The test validates both wave32 and wave64 forms.

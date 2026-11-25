@@ -954,6 +954,42 @@ std::optional<std::uint32_t> table_image_base_word(const descriptor::Heap& heap,
     return static_cast<std::uint32_t>(*address >> kImageBaseAddressShift);
 }
 
+std::optional<std::array<std::uint32_t, 2>> table_image_dimensions(const descriptor::Heap& heap,
+                                                                  std::uint64_t table, std::uint32_t dword) {
+    const auto view = table_view(heap, table, dword);
+    if (!view) return std::nullopt;
+    const auto desc = shader_view_desc(*view);
+    if (!desc || (desc->ViewDimension != D3D12_SRV_DIMENSION_TEXTURE2D &&
+                  desc->ViewDimension != D3D12_SRV_DIMENSION_TEXTURE2DARRAY))
+        return std::nullopt;
+
+    resource::ResourceDesc resource_desc{};
+    if (const auto* placed = std::get_if<descriptor::PlacedView>(&*view)) {
+        constexpr std::uint64_t kAlignment = 1ull << kImageBaseAddressShift;
+        const std::uint64_t address = placed_address(*placed);
+        if (address == 0 || address % kAlignment != 0) return std::nullopt;
+        std::memcpy(&resource_desc, placed->resource.data(), sizeof resource_desc);
+    } else {
+        const auto* srv = std::get_if<descriptor::ShaderView>(&*view);
+        if (srv == nullptr) return std::nullopt;
+        if (srv->resource == 0) return std::array<std::uint32_t, 2>{};
+        const auto memory = resource::texture_memory(reinterpret_cast<Object*>(srv->resource));
+        if (!memory) return std::nullopt;
+        resource_desc = memory->second;
+    }
+
+    if (resource_desc.dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || resource_desc.sample_count != 1 ||
+        resource_desc.width == 0 || resource_desc.width > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
+        resource_desc.height == 0 || resource_desc.height > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION)
+        return std::nullopt;
+    using UserData = g6shim::shader::emit::UserData;
+    constexpr std::uint32_t kWidthLowBits = 32u - UserData::kImageWidthLowShift;
+    const auto width = static_cast<std::uint32_t>(resource_desc.width - 1);
+    const std::uint32_t height = resource_desc.height - 1;
+    return std::array{width << UserData::kImageWidthLowShift,
+                      (width >> kWidthLowBits) | (height << UserData::kImageWidthHighBits)};
+}
+
 std::optional<std::uint32_t> table_image_sampling_fields(const descriptor::Heap& heap, std::uint64_t table,
                                                         std::uint32_t dword) {
     const auto view = table_view(heap, table, dword);

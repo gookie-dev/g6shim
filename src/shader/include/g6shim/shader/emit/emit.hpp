@@ -27,7 +27,7 @@ struct UserData {
         LinearRawBufferHighWord, LinearRawBufferFormatWord, StructuredBufferFormatWord,
         ImageSamplingFields, TypedBufferFormatWord, TypedBufferHighWord,
         ConstantBufferHighWord, ConstantBufferRecordCount, ConstantBufferFormatWord,
-        ShaderBufferRecordCount
+        ShaderBufferRecordCount, ImageWidthLowBits, ImageDimensions
     };
 
     std::uint32_t index = 0;
@@ -40,6 +40,9 @@ struct UserData {
     static constexpr std::uint32_t kBufferComponentMappingMask = 0xfff;
     static constexpr std::uint32_t kBufferStrideShift = 16;
     static constexpr std::uint32_t kBufferStrideMask = 0x3fff;
+    static constexpr std::uint32_t kImageWidthLowShift = 30;
+    static constexpr std::uint32_t kImageWidthHighBits = 14;
+    static constexpr std::uint32_t kImageDimensionsMask = 0x3fff'ffff;
     static constexpr std::uint32_t kImageSamplingPerformanceShift = 20;
     static constexpr std::uint32_t kImageSamplingPerformanceMask = 0x7u << kImageSamplingPerformanceShift;
     static constexpr std::uint32_t kImageLodWarningMask = 0xfffu << 8;
@@ -49,6 +52,8 @@ struct UserData {
     constexpr std::uint32_t known_bits() const {
         if (source == Source::ShaderBufferAddressHigh) return kBufferAddressHighMask;
         if (source == Source::ShaderBufferComponentMapping) return kBufferComponentMappingMask;
+        if (source == Source::ImageWidthLowBits) return UINT32_MAX << kImageWidthLowShift;
+        if (source == Source::ImageDimensions) return kImageDimensionsMask;
         if (source == Source::ImageSamplingFields) return kImageSamplingPerformanceMask | kImageLodWarningMask;
         return UINT32_MAX;
     }

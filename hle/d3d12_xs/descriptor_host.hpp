@@ -95,6 +95,8 @@ std::optional<std::uint32_t> table_buffer_component_mapping(const descriptor::He
                                                             std::uint32_t dword);
 std::optional<std::uint32_t> table_image_base_word(const descriptor::Heap& heap, std::uint64_t table,
                                                  std::uint32_t dword);
+std::optional<std::array<std::uint32_t, 2>> table_image_dimensions(const descriptor::Heap& heap,
+                                                                  std::uint64_t table, std::uint32_t dword);
 std::optional<std::uint32_t> table_image_sampling_fields(const descriptor::Heap& heap, std::uint64_t table,
                                                         std::uint32_t dword);
 std::optional<descriptor::View> placed_texture(const descriptor::View& view);
