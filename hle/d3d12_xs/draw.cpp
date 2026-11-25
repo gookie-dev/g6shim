@@ -317,7 +317,7 @@ const descriptor::Heap* State::heap_of(std::uint64_t handle) const {
     return nullptr;
 }
 
-std::optional<std::uint32_t> State::descriptor_address(
+std::optional<std::uint32_t> State::descriptor_value(
     bool compute, const g6shim::shader::emit::UserData& data) const {
     const auto& all = roots(compute);
     if (data.slot >= all.size()) return std::nullopt;
@@ -328,9 +328,13 @@ std::optional<std::uint32_t> State::descriptor_address(
     using Source = g6shim::shader::emit::UserData::Source;
     if (data.source == Source::ImageBaseAddressLow)
         return descriptor_host::table_image_base_word(*heap, root.value, data.dword);
+    if (data.source == Source::ShaderBufferComponentMapping)
+        return descriptor_host::table_buffer_component_mapping(*heap, root.value, data.dword);
     const auto address = descriptor_host::table_buffer_address(
         *heap, root.value, data.dword, data.source == Source::ConstantBufferAddressLow);
     if (!address) return std::nullopt;
+    if (data.source == Source::ShaderBufferAddressHigh)
+        return static_cast<std::uint32_t>(*address >> 32) & data.known_bits();
     return static_cast<std::uint32_t>(*address);
 }
 
@@ -425,15 +429,15 @@ bool State::bind(host::HostList& list, const pipeline_host::HostPipeline& pipeli
             values.resize(stage.user_data->second);
             for (const auto& data : translated->host.user_data) {
                 if (data.source == Source::Root) continue;
-                const auto address = descriptor_address(compute, data);
-                if (!address || data.index >= values.size()) {
+                const auto value = descriptor_value(compute, data);
+                if (!value || data.index >= values.size()) {
                     static std::once_flag once;
                     std::call_once(once, [] {
-                        G6SHIM_WARN("d3d12_xs: a shader reads the address of an unavailable descriptor");
+                        G6SHIM_WARN("d3d12_xs: a shader reads a field of an unavailable descriptor");
                     });
                     return false;
                 }
-                values[data.index] = *address;
+                values[data.index] = *value;
             }
         }
         table_failed_ = false;

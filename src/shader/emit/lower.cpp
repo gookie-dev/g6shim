@@ -1998,7 +1998,73 @@ std::size_t Lower::edge(std::size_t from, std::size_t to) {
     return e;
 }
 
+bool Lower::has_partial_descriptor(Value value) const {
+    if (!descriptor_addresses_.contains(value) && !phi_at_.contains(value)) return false;
+    std::unordered_set<Value, ValueHash> visited;
+    std::vector<Value> work{value};
+    while (!work.empty()) {
+        const Value v = work.back();
+        work.pop_back();
+        if (!visited.insert(v).second) continue;
+        const auto field = descriptor_addresses_.find(v);
+        if (field != descriptor_addresses_.end() && field->second.known_bits() != UINT32_MAX) return true;
+        const auto at = phi_at_.find(v);
+        if (at == phi_at_.end() || is_mask(v) || x_->st->highs.contains(v)) continue;
+        const auto [b, i] = at->second;
+        const Phi& phi = x_->p->blocks[b].phis[i];
+        if (phi.reg.kind == Reg::Kind::S) work.insert(work.end(), phi.args.begin(), phi.args.end());
+    }
+    return false;
+}
+
+V Lower::masked_descriptor_value(Value value, std::uint32_t mask) {
+    constexpr Why unknown_bits = "a descriptor's address or format read as data";
+    const auto field = descriptor_addresses_.find(value);
+    if (field != descriptor_addresses_.end()) {
+        if ((mask & ~field->second.known_bits()) != 0) fail(unknown_bits);
+        return descriptor_address(field->second).value;
+    }
+    const auto at = phi_at_.find(value);
+    if (at != phi_at_.end() && !is_mask(value) && !x_->st->highs.contains(value)) {
+        if (bad_->contains(value)) fail(bad_->at(value));
+        const auto [b, i] = at->second;
+        if (block_[b] && x_->p->blocks[b].phis[i].reg.kind == Reg::Kind::S) {
+            const auto [entry, inserted] = masked_descriptor_phis_.try_emplace({value, mask}, V{});
+            if (inserted) {
+                entry->second = s_.m.phi(*block_[b], s_.t.i32);
+                pending_descriptor_phis_.emplace_back(value, mask, entry->second);
+            }
+            return entry->second;
+        }
+    }
+    const Val val = get(value);
+    if (val.kind != Val::Kind::I32) fail("an SCC joined with SGPR values");
+    return val.value;
+}
+
+void Lower::fill_masked_descriptor_phis() {
+    for (std::size_t i = 0; i < pending_descriptor_phis_.size(); ++i) {
+        const auto [source, mask, result] = pending_descriptor_phis_[i];
+        const auto [b, n] = phi_at_.at(source);
+        const auto& block = x_->p->blocks[b];
+        const Phi& phi = block.phis[n];
+        std::vector<std::pair<V, std::size_t>> incoming;
+        for (std::size_t j = 0; j < block.preds.size(); ++j) {
+            const std::size_t q = block.preds[j];
+            if (!tail_[q]) continue;
+            const std::size_t qb = edges_.contains({q, b}) ? edges_.at({q, b}) : *tail_[q];
+            try {
+                incoming.emplace_back(masked_descriptor_value(phi.args[j], mask), qb);
+            } catch (const WhyError& error) {
+                throw Stop::retry(source, error.why);
+            }
+        }
+        s_.m.set_phi(result, incoming);
+    }
+}
+
 void Lower::fill_phis() {
+    fill_masked_descriptor_phis();
     const Program& p = *x_->p;
     std::vector<Value> work;
     for (Value v : read_phis_) work.push_back(v);

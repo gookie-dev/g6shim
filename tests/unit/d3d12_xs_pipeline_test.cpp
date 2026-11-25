@@ -185,6 +185,8 @@ emit::HostShader sample_shader() {
     shader.user_data.push_back(emit::UserData{9, 1, root, 8, emit::UserData::Source::ConstantBufferAddressLow});
     shader.user_data.push_back(emit::UserData{10, 1, root, 16, emit::UserData::Source::ShaderBufferAddressLow});
     shader.user_data.push_back(emit::UserData{11, 1, root, 24, emit::UserData::Source::ImageBaseAddressLow});
+    shader.user_data.push_back(emit::UserData{12, 1, root, 16, emit::UserData::Source::ShaderBufferAddressHigh});
+    shader.user_data.push_back(emit::UserData{13, 1, root, 16, emit::UserData::Source::ShaderBufferComponentMapping});
     shader.samplers.push_back({0x400, 0xC0'0000, 0x18F0'0000, 0});
     shader.static_samplers.push_back(emit::StaticSampler::from_words({0x400, 0xC0'0000, 0x18F0'0000, 0}));
     shader.root_cbvs = {2};
@@ -339,7 +341,7 @@ TEST(d3d12_xs_pipeline_shader_entries_round_trip_and_reject_damage) {
     const std::array<std::uint8_t, 4> wrong{'V', 'S', 'H', '1'};
     CHECK(!shader_cache::decode_entry(wrong).has_value());
     emit::HostShader bad_source = original;
-    bad_source.user_data.back().source = static_cast<emit::UserData::Source>(4);
+    bad_source.user_data.back().source = static_cast<emit::UserData::Source>(UINT32_MAX);
     CHECK(!shader_cache::decode_entry(shader_cache::encode_entry(bad_source)).has_value());
 }
 

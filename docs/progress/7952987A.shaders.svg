@@ -184,7 +184,7 @@
 <rect x="397" y="52" width="8" height="8" fill="#57606a"/>
 </g>
 <text x="14" y="71">ms</text>
-<text x="144" y="71" text-anchor="end">8392/8765</text>
+<text x="144" y="71" text-anchor="end">8429/8765</text>
 <g shape-rendering="crispEdges">
 <rect x="154" y="64" width="8" height="8" fill="#2ea043"/>
 <rect x="163" y="64" width="8" height="8" fill="#2ea043"/>
@@ -272,7 +272,7 @@
 <rect x="325" y="76" width="8" height="8" fill="#58a6ff"/>
 <rect x="334" y="76" width="8" height="8" fill="#58a6ff"/>
 <rect x="343" y="76" width="8" height="8" fill="#58a6ff"/>
-<rect x="352" y="76" width="8" height="8" fill="#58a6ff"/>
+<rect x="352" y="76" width="8" height="8" fill="#57606a"/>
 </g>
 <text x="14" y="95">gs</text>
 <text x="144" y="95" text-anchor="end">0/195</text>

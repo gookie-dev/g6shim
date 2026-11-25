@@ -184,6 +184,9 @@ private:
     bool defer_descriptor_address(Value value, const Source& src, const UsedResource& used,
                                   UserData::Source source);
     Val descriptor_address(UserData data);
+    bool has_partial_descriptor(Value value) const;
+    V masked_descriptor_value(Value value, std::uint32_t mask);
+    void fill_masked_descriptor_phis();
     Val user_dword(std::uint32_t index);
     void code_smem(const IrInst& inst, Address a);
     V cbuffer_dword(V h, V a);
@@ -246,6 +249,8 @@ private:
     std::unordered_set<Value, ValueHash> read_phis_;
     std::unordered_map<Value, std::pair<std::size_t, std::uint32_t>, ValueHash> params_;
     std::unordered_map<Value, UserData, ValueHash> descriptor_addresses_;
+    std::map<std::pair<Value, std::uint32_t>, V> masked_descriptor_phis_;
+    std::vector<std::tuple<Value, std::uint32_t, V>> pending_descriptor_phis_;
     std::optional<V> user_data_;
     std::map<std::uint32_t, UserData> user_reads_;
     std::vector<std::array<std::uint32_t, 4>> samplers_;

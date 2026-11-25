@@ -36,6 +36,7 @@ constexpr std::uint32_t kUserSgprShift = 1;
 constexpr std::uint32_t kSecondDescriptorDword = 8;
 constexpr std::string_view kScalarBufferLength = "scalar_buffer_length";
 constexpr std::string_view kScalarBufferAddress = "scalar_buffer_address";
+constexpr std::string_view kScalarBufferFields = "scalar_buffer_fields";
 constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 
 const Fixture* find_fixture(std::string_view name) {
@@ -57,7 +58,7 @@ TEST(shader_fixtures_translate_and_validate) {
     CHECK(std::size(kFixtures) > 0);
     for (const Fixture& fixture : kFixtures) {
         if (fixture.name == kScalarBufferLength || fixture.name == kScalarBufferAddress ||
-            fixture.name == kScalarImageAddress)
+            fixture.name == kScalarBufferFields || fixture.name == kScalarImageAddress)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -112,6 +113,42 @@ TEST(shader_fixtures_translate_scalar_buffer_address_at_a_join) {
         }
         check_dxil(lowered.dxil, fixture->name);
     }
+}
+
+TEST(shader_fixtures_translate_masked_scalar_buffer_fields_at_a_join) {
+    const Fixture* fixture = find_fixture(kScalarBufferFields);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    UsedResource input = used_uav(kTableUserData, kTableSlot);
+    input.kind.kind = ResourceType::Kind::Srv;
+    UsedResource output = used_uav(kTableUserData, kTableSlot);
+    output.table_offset_dwords = kSecondDescriptorDword;
+    const Lowered lowered = lower_fixture(*fixture, {input, output});
+    using Source = UserData::Source;
+    for (const Source source : {Source::ShaderBufferAddressHigh, Source::ShaderBufferComponentMapping}) {
+        const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(),
+                                        [source](const UserData& entry) { return entry.source == source; });
+        CHECK(field != lowered.user_data.end());
+        if (field != lowered.user_data.end()) {
+            CHECK(field->slot == kTableSlot);
+            CHECK(field->dword == 0);
+        }
+    }
+    check_dxil(lowered.dxil, fixture->name);
+
+    Fixture unknown = *fixture;
+    const auto mask = std::find(unknown.words.begin(), unknown.words.end(), UserData::kBufferAddressHighMask);
+    CHECK(mask != unknown.words.end());
+    if (mask == unknown.words.end()) return;
+    *mask |= UserData::kBufferAddressHighMask + 1;
+    bool rejected = false;
+    try {
+        (void)lower_fixture(unknown, {input, output});
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("a descriptor's address or format read as data") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
 }
 
 TEST(shader_fixtures_translate_scalar_reads_of_image_addresses) {

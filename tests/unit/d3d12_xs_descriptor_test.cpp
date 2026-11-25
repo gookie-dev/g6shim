@@ -115,6 +115,7 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
     srv.Format = DXGI_FORMAT_R32_TYPELESS;
     srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srv.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(3, 4, 5, 0);
     srv.Buffer.FirstElement = 3;
     srv.Buffer.NumElements = 8;
     srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
@@ -134,10 +135,20 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     CHECK(!table_buffer_address(heap, table, kSlotDwords + 1, false));
     CHECK(!table_buffer_address(heap, table + 4, 0, true));
     CHECK(!table_buffer_address(heap, table, 3 * kSlotDwords, false));
+    using descriptor_host::table_buffer_component_mapping;
+    CHECK(table_buffer_component_mapping(heap, table, kSlotDwords) == 0x847u);
+    CHECK(table_buffer_component_mapping(heap, table, 2 * kSlotDwords) == 0u);
+    CHECK(!table_buffer_component_mapping(heap, table, 0));
+    CHECK(!table_buffer_component_mapping(heap, table, kSlotDwords + 1));
+    CHECK(!table_buffer_component_mapping(heap, table, 3 * kSlotDwords));
     shader_words[10] = 0xFFFF'FFFC;
     shader_words[11] = 0xFFFF'FFFF;
     descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
     CHECK(!table_buffer_address(heap, table, kSlotDwords, false));
+    srv.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(0, 1, 6, 3);
+    std::memcpy(shader_words.data(), &srv, sizeof srv);
+    descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
+    CHECK(!table_buffer_component_mapping(heap, table, kSlotDwords));
     release(object);
 }
 

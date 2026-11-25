@@ -19,6 +19,13 @@ namespace {
 constexpr std::uint64_t kCodeCbvSize = 0x1'0000;
 constexpr std::pair<std::uint32_t, std::uint32_t> kRawBufferSrv{11, 0};
 constexpr std::uint32_t kResourceDescriptorBytes = 32;
+constexpr Why kDescriptorData = "a descriptor's address or format read as data";
+
+std::optional<std::uint32_t> operand_constant(const Operand& value) {
+    if (const auto* literal = std::get_if<LiteralOperand>(&value)) return literal->value;
+    if (const auto* encoded = std::get_if<ConstantOperand>(&value)) return inline_constant(encoded->code);
+    return std::nullopt;
+}
 
 bool strip(std::string_view text, std::string_view prefix, std::string_view* rest) {
     if (!text.starts_with(prefix)) return false;
@@ -55,6 +62,21 @@ void Lower::sop(const IrInst& inst) {
     if (name == "s_setreg_imm32_b32" || name == "s_setreg_b32" || name == "s_swappc_b64" ||
         name == "s_version" || name.starts_with("s_waitcnt"))
         fail("a register the emitter does not model");
+    const auto scalar_value = [&](const Operand& op) -> std::optional<Value> {
+        const auto* reg = std::get_if<ScalarOperand>(&op);
+        if (reg == nullptr) return std::nullopt;
+        return inst.read(Reg::s(reg->code));
+    };
+    if (name == "s_mov_b32" && lo && src.size() == 1) {
+        const auto value = scalar_value(src[0]);
+        const auto field = value ? descriptor_addresses_.find(*value) : descriptor_addresses_.end();
+        if (field != descriptor_addresses_.end() && field->second.known_bits() != UINT32_MAX) {
+            const UserData data = field->second;
+            descriptor_addresses_[*lo] = data;
+            vals_[*lo] = Val::missing(kDescriptorData);
+            return;
+        }
+    }
     const std::size_t c = cur_;
     const auto src32 = [&](std::size_t k) -> V {
         if (k == 0 && (name == "s_addk_i32" || name == "s_mulk_i32")) {
@@ -350,8 +372,16 @@ void Lower::sop(const IrInst& inst) {
     } else if (name == "s_and_b32" || name == "s_or_b32" || name == "s_xor_b32" ||
                name == "s_andn2_b32" || name == "s_orn2_b32" || name == "s_nand_b32" ||
                name == "s_nor_b32" || name == "s_xnor_b32") {
-        const V a = src32(0);
-        V b = src32(1);
+        const auto masked_operand = [&](std::size_t index) -> V {
+            if (name == "s_and_b32" && src.size() == 2) {
+                const auto mask = operand_constant(src[1 - index]);
+                const auto value = scalar_value(src[index]);
+                if (mask && value && has_partial_descriptor(*value)) return masked_descriptor_value(*value, *mask);
+            }
+            return src32(index);
+        };
+        const V a = masked_operand(0);
+        V b = masked_operand(1);
         const V ones = s_.m.i32(UINT32_MAX);
         if (name.find("n2") != std::string_view::npos) b = s_.m.bin(c, Bin::Xor, b, ones);
         const std::string_view op = name.substr(2, 3);
@@ -570,7 +600,6 @@ bool Lower::defer_descriptor_address(Value value, const Source& src, const UsedR
 }
 
 void Lower::descriptor_data(const IrInst& inst, Site site) {
-    constexpr Why other = "a descriptor's address or format read as data";
     const auto* fields = std::get_if<SmemFields>(&inst.fields);
     if (fields == nullptr || !fields->data) fail("a scalar memory read as data");
     const auto* data = std::get_if<ScalarOperand>(&*fields->data);
@@ -711,7 +740,11 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
             if (rel == 0 && image && used != nullptr &&
                 defer_descriptor_address(*v, src, *used, UserData::Source::ImageBaseAddressLow))
                 continue;
-            vals_[*v] = Val::missing(other);
+            if (scalar_srv && rel == 1)
+                defer_descriptor_address(*v, src, *used, UserData::Source::ShaderBufferAddressHigh);
+            if (scalar_srv && rel == 3)
+                defer_descriptor_address(*v, src, *used, UserData::Source::ShaderBufferComponentMapping);
+            vals_[*v] = Val::missing(kDescriptorData);
         }
     }
 }

@@ -739,6 +739,38 @@ std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, 
     return range->first;
 }
 
+std::optional<std::uint32_t> table_buffer_component_mapping(const descriptor::Heap& heap, std::uint64_t table,
+                                                            std::uint32_t dword) {
+    const auto view = table_view(heap, table, dword);
+    if (!view) return std::nullopt;
+    D3D12_SHADER_RESOURCE_VIEW_DESC desc{};
+    if (const auto* srv = std::get_if<descriptor::ShaderView>(&*view)) {
+        if (!srv->desc) return srv->resource == 0 ? std::optional<std::uint32_t>{0} : std::nullopt;
+        desc = srv_desc(*srv->desc);
+        if (desc.ViewDimension != D3D12_SRV_DIMENSION_BUFFER) return std::nullopt;
+        if (srv->resource == 0) return 0;
+    } else {
+        const auto* placed = std::get_if<descriptor::PlacedView>(&*view);
+        if (placed == nullptr || placed->unordered || placed->resource[0] != kBufferDimension) return std::nullopt;
+        std::array<std::uint32_t, 10> words{};
+        std::copy_n(placed->desc.begin(), words.size(), words.begin());
+        desc = srv_desc(words);
+        if (desc.ViewDimension != D3D12_SRV_DIMENSION_BUFFER) return std::nullopt;
+    }
+    constexpr std::uint32_t kMappingMark = D3D12_SHADER_COMPONENT_MAPPING_ALWAYS_SET_BIT_AVOIDING_ZEROMEM_MISTAKES;
+    if (desc.Shader4ComponentMapping / kMappingMark != 1) return std::nullopt;
+    constexpr std::array<std::uint32_t, 6> kGfx10Selectors{4, 5, 6, 7, 0, 1};
+    constexpr std::uint32_t kSelectorBits = 3;
+    std::uint32_t word = 0;
+    for (std::uint32_t i = 0; i < 4; ++i) {
+        const auto source = D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(i, desc.Shader4ComponentMapping);
+        const auto index = static_cast<std::size_t>(source);
+        if (index >= kGfx10Selectors.size()) return std::nullopt;
+        word |= kGfx10Selectors[index] << (i * kSelectorBits);
+    }
+    return word;
+}
+
 std::optional<std::uint32_t> table_image_base_word(const descriptor::Heap& heap, std::uint64_t table,
                                                  std::uint32_t dword) {
     const auto view = table_view(heap, table, dword);
