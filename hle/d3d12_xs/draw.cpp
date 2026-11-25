@@ -326,6 +326,8 @@ std::optional<std::uint32_t> State::descriptor_address(
     const descriptor::Heap* heap = heap_of(root.value);
     if (heap == nullptr) return std::nullopt;
     using Source = g6shim::shader::emit::UserData::Source;
+    if (data.source == Source::ImageBaseAddressLow)
+        return descriptor_host::table_image_base_word(*heap, root.value, data.dword);
     const auto address = descriptor_host::table_buffer_address(
         *heap, root.value, data.dword, data.source == Source::ConstantBufferAddressLow);
     if (!address) return std::nullopt;
@@ -427,7 +429,7 @@ bool State::bind(host::HostList& list, const pipeline_host::HostPipeline& pipeli
                 if (!address || data.index >= values.size()) {
                     static std::once_flag once;
                     std::call_once(once, [] {
-                        G6SHIM_WARN("d3d12_xs: a shader reads the address of an unavailable buffer descriptor");
+                        G6SHIM_WARN("d3d12_xs: a shader reads the address of an unavailable descriptor");
                     });
                     return false;
                 }

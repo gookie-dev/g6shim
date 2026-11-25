@@ -5,6 +5,7 @@
 #include "d3d12_xs/descriptor.hpp"
 #include "d3d12_xs/descriptor_host.hpp"
 #include "d3d12_xs/object.hpp"
+#include "d3d12_xs/resource.hpp"
 
 #include <array>
 #include <cstdint>
@@ -137,6 +138,65 @@ TEST(d3d12_xs_table_buffer_addresses_are_bound_to_the_requested_slot) {
     shader_words[11] = 0xFFFF'FFFF;
     descriptor::create_placed_srv(nullptr, resource_words.data(), shader_words.data(), table + step);
     CHECK(!table_buffer_address(heap, table, kSlotDwords, false));
+    release(object);
+}
+
+TEST(d3d12_xs_table_image_address_uses_the_title_base) {
+    constexpr std::uint32_t kSlotDwords = 8;
+    const descriptor::HeapDesc desc{0, 3, 1, 0};
+    const descriptor::Placement none{0, 0};
+    Object* object = nullptr;
+    CHECK(create_heap_with(desc, none, &object) == S_OK);
+    if (object == nullptr) return;
+    const auto& heap = *static_cast<descriptor::Heap*>(object);
+    const auto step = descriptor::increment_size(nullptr, desc.kind);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2D.MipLevels = 1;
+    std::array<std::uint32_t, 16> words{};
+    std::memcpy(words.data(), &srv, sizeof srv);
+
+    resource::ResourceDesc texture{};
+    texture.dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texture.width = 16;
+    texture.height = 16;
+    texture.depth_or_array_size = 1;
+    texture.mip_levels = 1;
+    texture.format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    texture.sample_count = 1;
+    std::array<std::uint32_t, 14> resource_words{};
+    std::memcpy(resource_words.data(), &texture, sizeof texture);
+    words[10] = 0x5678'9A00;
+    words[11] = 0x1234;
+    descriptor::create_placed_srv(nullptr, resource_words.data(), words.data(), heap.start + step);
+    descriptor::create_srv(nullptr, nullptr, words.data(), heap.start + 2 * step);
+    CHECK(descriptor_host::table_image_base_word(heap, heap.start, kSlotDwords) == 0x3456'789Au);
+    CHECK(descriptor_host::table_image_base_word(heap, heap.start, 2 * kSlotDwords) == 0u);
+    CHECK(!descriptor_host::table_image_base_word(heap, heap.start, 3 * kSlotDwords));
+    ++words[10];
+    descriptor::create_placed_srv(nullptr, resource_words.data(), words.data(), heap.start + step);
+    CHECK(!descriptor_host::table_image_base_word(heap, heap.start, kSlotDwords));
+    resource_words[0] = D3D12_RESOURCE_DIMENSION_BUFFER;
+    --words[10];
+    descriptor::create_placed_srv(nullptr, resource_words.data(), words.data(), heap.start + step);
+    CHECK(!descriptor_host::table_image_base_word(heap, heap.start, kSlotDwords));
+
+    const resource::HeapProperties properties{1, 0, 0, 1, 1};
+    Object* image = nullptr;
+    CHECK(resource::create_committed(nullptr, &properties, 0, &texture, 0, nullptr,
+                                     &resource::kResourceIids[0], &image) == S_OK);
+    if (image != nullptr) {
+        const auto memory = resource::texture_memory(image);
+        CHECK(memory.has_value());
+        if (memory) {
+            descriptor::create_srv(nullptr, image, words.data(), heap.start);
+            CHECK(descriptor_host::table_image_base_word(heap, heap.start, 0) ==
+                  static_cast<std::uint32_t>(reinterpret_cast<std::uint64_t>(memory->first) >> 8));
+        }
+        release(image);
+    }
     release(object);
 }
 

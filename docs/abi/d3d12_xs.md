@@ -81,6 +81,8 @@ A subobject holds its type at +0, its data at +4, or at +8 when the data holds a
 
 When a shader reads the low address word of a scalar buffer descriptor at a fixed table offset, the draw supplies the title-facing address in a stage user-data constant. A constant buffer uses its view address. A shader-resource buffer uses its resource address plus the view's first-element offset. The draw reads the source table before mirroring descriptors into the host heap.
 
+Image base-address words in fixed table slots use the same binding path. The source is the texture's title-facing memory address or the explicit address in a placed view. The image descriptor stores the base in units of 256 bytes.
+
 ## Device slots
 
 | Slot | Offset | Method |

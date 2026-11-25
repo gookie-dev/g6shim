@@ -36,6 +36,7 @@ constexpr std::uint32_t kUserSgprShift = 1;
 constexpr std::uint32_t kSecondDescriptorDword = 8;
 constexpr std::string_view kScalarBufferLength = "scalar_buffer_length";
 constexpr std::string_view kScalarBufferAddress = "scalar_buffer_address";
+constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 
 const Fixture* find_fixture(std::string_view name) {
     const auto found = std::find_if(std::begin(kFixtures), std::end(kFixtures),
@@ -55,7 +56,9 @@ Lowered lower_fixture(const Fixture& fixture, const std::vector<UsedResource>& u
 TEST(shader_fixtures_translate_and_validate) {
     CHECK(std::size(kFixtures) > 0);
     for (const Fixture& fixture : kFixtures) {
-        if (fixture.name == kScalarBufferLength || fixture.name == kScalarBufferAddress) continue;
+        if (fixture.name == kScalarBufferLength || fixture.name == kScalarBufferAddress ||
+            fixture.name == kScalarImageAddress)
+            continue;
         bool translated = true;
         Lowered lowered;
         try {
@@ -109,4 +112,26 @@ TEST(shader_fixtures_translate_scalar_buffer_address_at_a_join) {
         }
         check_dxil(lowered.dxil, fixture->name);
     }
+}
+
+TEST(shader_fixtures_translate_scalar_reads_of_image_addresses) {
+    const Fixture* fixture = find_fixture(kScalarImageAddress);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+    UsedResource input = used_uav(kTableUserData, kTableSlot);
+    input.kind.kind = ResourceType::Kind::Srv;
+    input.dwords = 8;
+    UsedResource output = used_uav(kTableUserData, kTableSlot);
+    output.table_offset_dwords = kSecondDescriptorDword;
+    const Lowered lowered = lower_fixture(*fixture, {input, output});
+    const auto address = std::find_if(lowered.user_data.begin(), lowered.user_data.end(), [](const UserData& entry) {
+        return entry.source == UserData::Source::ImageBaseAddressLow;
+    });
+    CHECK(address != lowered.user_data.end());
+    if (address != lowered.user_data.end()) {
+        CHECK(address->index == kUserSgprs);
+        CHECK(address->slot == kTableSlot);
+        CHECK(address->dword == 0);
+    }
+    check_dxil(lowered.dxil, fixture->name);
 }

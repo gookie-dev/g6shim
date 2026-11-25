@@ -295,7 +295,7 @@ std::optional<HostShader> decode_entry(std::span<const std::uint8_t> bytes) {
         using UserData = g6shim::shader::emit::UserData;
         using Source = UserData::Source;
         if (!index || !slot || !root || !dword || !source || *slot > 0xFF ||
-            *source > static_cast<std::uint32_t>(Source::ShaderBufferAddressLow))
+            *source > static_cast<std::uint32_t>(Source::ImageBaseAddressLow))
             return std::nullopt;
         const RootType type = root_type(*root);
         if (*source != static_cast<std::uint32_t>(Source::Root) && type.kind != RootType::Kind::Table)

@@ -24,6 +24,7 @@ constexpr std::uint32_t kBlockSlots = 1 << 16;
 constexpr std::uint32_t kBufferDimension = 1;
 constexpr std::uint32_t kRawElementBytes = 4;
 constexpr std::uint32_t kElementAlignment = 256;
+constexpr std::uint32_t kImageBaseAddressShift = 8;
 constexpr std::uint32_t kDepthUnorderedFlags = 0x7;
 constexpr std::uint32_t kTextureViews = 2;
 constexpr std::uint32_t kTextureViewsEnd = 10;
@@ -321,6 +322,48 @@ std::optional<std::pair<std::uint64_t, std::uint64_t>> srv_range(std::uint64_t b
                           static_cast<std::uint64_t>(desc.Buffer.NumElements) * element);
 }
 
+std::uint64_t placed_address(const descriptor::PlacedView& view) {
+    constexpr std::size_t kAddressLow = 10;
+    constexpr std::size_t kAddressHigh = 11;
+    return std::uint64_t{view.desc[kAddressLow]} | std::uint64_t{view.desc[kAddressHigh]} << 32;
+}
+
+std::optional<descriptor::View> table_view(const descriptor::Heap& heap, std::uint64_t table, std::uint32_t dword) {
+    if (heap.desc.kind != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || !heap.index(table))
+        return std::nullopt;
+    const std::uint32_t step = descriptor::increment_size(nullptr, heap.desc.kind);
+    const std::uint64_t offset = sizeof(std::uint32_t) * std::uint64_t{dword};
+    if ((table - heap.start) % step != 0 || offset % step != 0 ||
+        table > std::numeric_limits<std::uint64_t>::max() - offset || !heap.index(table + offset))
+        return std::nullopt;
+    return descriptor::view(table + offset);
+}
+
+std::optional<std::uint64_t> image_address(const descriptor::View& view) {
+    if (const auto* placed = std::get_if<descriptor::PlacedView>(&view)) {
+        if (placed->resource[0] < D3D12_RESOURCE_DIMENSION_TEXTURE1D ||
+            placed->resource[0] > D3D12_RESOURCE_DIMENSION_TEXTURE3D)
+            return std::nullopt;
+        return placed_address(*placed);
+    }
+    std::uintptr_t address = 0;
+    if (const auto* srv = std::get_if<descriptor::ShaderView>(&view)) {
+        if (srv->desc && srv_desc(*srv->desc).ViewDimension <= D3D12_SRV_DIMENSION_BUFFER)
+            return std::nullopt;
+        address = srv->resource;
+    } else if (const auto* uav = std::get_if<descriptor::UnorderedView>(&view)) {
+        if (uav->desc && uav_desc(*uav->desc).ViewDimension <= D3D12_UAV_DIMENSION_BUFFER)
+            return std::nullopt;
+        address = uav->resource;
+    } else {
+        return std::nullopt;
+    }
+    if (address == 0) return 0;
+    const auto texture = resource::texture_memory(reinterpret_cast<Object*>(address));
+    if (!texture || texture->first == nullptr) return std::nullopt;
+    return reinterpret_cast<std::uint64_t>(texture->first);
+}
+
 std::optional<Microsoft::WRL::ComPtr<ID3D12Resource>> make(const descriptor::View& view,
                                                            D3D12_CPU_DESCRIPTOR_HANDLE at) {
     host::Host* gpu = host::host();
@@ -395,8 +438,7 @@ std::optional<Microsoft::WRL::ComPtr<ID3D12Resource>> make(const descriptor::Vie
     }
     const std::uint64_t bytes = static_cast<std::uint64_t>(placed->resource[4]) |
                                 static_cast<std::uint64_t>(placed->resource[5]) << 32;
-    const std::uint64_t address = static_cast<std::uint64_t>(placed->desc[10]) |
-                                  static_cast<std::uint64_t>(placed->desc[11]) << 32;
+    const std::uint64_t address = placed_address(*placed);
     std::array<std::uint32_t, 10> words{};
     std::copy_n(placed->desc.begin(), 10, words.begin());
     if (placed->unordered) return buffer_uav(address, bytes, uav_desc(words), at);
@@ -654,8 +696,7 @@ std::optional<std::pair<std::uint64_t, std::uint64_t>> buffer_range(const descri
     }
     if (const auto* placed = std::get_if<descriptor::PlacedView>(&view)) {
         if (placed->resource[0] != kBufferDimension) return std::nullopt;
-        const std::uint64_t base = static_cast<std::uint64_t>(placed->desc[10]) |
-                                   static_cast<std::uint64_t>(placed->desc[11]) << 32;
+        const std::uint64_t base = placed_address(*placed);
         std::array<std::uint32_t, 10> words{};
         std::copy_n(placed->desc.begin(), 10, words.begin());
         if (placed->unordered) return unordered_range(base, words);
@@ -672,14 +713,7 @@ std::optional<std::pair<std::uint64_t, std::uint64_t>> buffer_range(const descri
 
 std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, std::uint64_t table,
                                                   std::uint32_t dword, bool constant_buffer) {
-    if (heap.desc.kind != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || !heap.index(table))
-        return std::nullopt;
-    const std::uint32_t step = descriptor::increment_size(nullptr, heap.desc.kind);
-    const std::uint64_t offset = sizeof(std::uint32_t) * std::uint64_t{dword};
-    if ((table - heap.start) % step != 0 || offset % step != 0 ||
-        table > std::numeric_limits<std::uint64_t>::max() - offset || !heap.index(table + offset))
-        return std::nullopt;
-    const auto view = descriptor::view(table + offset);
+    const auto view = table_view(heap, table, dword);
     if (!view) return std::nullopt;
     if (constant_buffer) {
         const auto* buffer = std::get_if<descriptor::ConstantView>(&*view);
@@ -705,11 +739,20 @@ std::optional<std::uint64_t> table_buffer_address(const descriptor::Heap& heap, 
     return range->first;
 }
 
+std::optional<std::uint32_t> table_image_base_word(const descriptor::Heap& heap, std::uint64_t table,
+                                                 std::uint32_t dword) {
+    const auto view = table_view(heap, table, dword);
+    if (!view) return std::nullopt;
+    const auto address = image_address(*view);
+    constexpr std::uint64_t kImageAlignment = 1ull << kImageBaseAddressShift;
+    if (!address || *address % kImageAlignment != 0) return std::nullopt;
+    return static_cast<std::uint32_t>(*address >> kImageBaseAddressShift);
+}
+
 std::optional<descriptor::View> placed_texture(const descriptor::View& view) {
     const auto* placed = std::get_if<descriptor::PlacedView>(&view);
     if (placed == nullptr || placed->unordered || placed->resource[0] == kBufferDimension) return std::nullopt;
-    const std::uint64_t address = static_cast<std::uint64_t>(placed->desc[10]) |
-                                  static_cast<std::uint64_t>(placed->desc[11]) << 32;
+    const std::uint64_t address = placed_address(*placed);
     const auto key = std::make_pair(address, placed->resource);
     {
         std::lock_guard<std::mutex> lock(g_placed_mutex);

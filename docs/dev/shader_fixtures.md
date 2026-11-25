@@ -22,6 +22,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `scalar_buffer_address.s` uses the same bindings. A branch joins the low address word with a zero value before the store. The test uses both shader-resource and constant-buffer input views.
 
+`scalar_image_address.s` uses the first slot for an image descriptor. It stores the shifted base-address word and the result of an image load in the output UAV.
+
 ## Adding a program
 
 1. Write `tests/gfx10/<rule>.s` in the frame above; the file name is the fixture's name.

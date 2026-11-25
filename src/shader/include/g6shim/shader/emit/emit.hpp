@@ -21,7 +21,7 @@
 namespace g6shim::shader::emit {
 
 struct UserData {
-    enum class Source : std::uint32_t { Root, ConstantBufferAddressLow, ShaderBufferAddressLow };
+    enum class Source : std::uint32_t { Root, ConstantBufferAddressLow, ShaderBufferAddressLow, ImageBaseAddressLow };
 
     std::uint32_t index = 0;
     std::uint8_t slot = 0;

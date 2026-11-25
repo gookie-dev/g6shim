@@ -708,6 +708,9 @@ void Lower::descriptor_data(const IrInst& inst, Site site) {
             if (!v) continue;
             if (rel == 0 && scalar_srv && defer_descriptor_address(*v, src, *used, UserData::Source::ShaderBufferAddressLow))
                 continue;
+            if (rel == 0 && image && used != nullptr &&
+                defer_descriptor_address(*v, src, *used, UserData::Source::ImageBaseAddressLow))
+                continue;
             vals_[*v] = Val::missing(other);
         }
     }
