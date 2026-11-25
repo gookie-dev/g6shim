@@ -81,6 +81,8 @@ Emitted vertices are written with `ds_write*` into the geometry-to-vertex area. 
 
 `s_sendmsg` `MSG_GS` with `GS_OP_EMIT` emits the vertex, `GS_OP_CUT` ends the strip, and `GS_OP_EMIT_CUT` does both. The program finishes with `MSG_GS_DONE` and `GS_OP_NOP`.
 
+Geometry DXIL records its input width, stream 0 output width and a bitmask of dependent outputs for each input, followed by zero widths for the other three streams. The pipeline validation part uses the same input-to-output mask orientation. [DXIL view state serialization](https://github.com/microsoft/DirectXShaderCompiler/blob/main/lib/HLSL/ComputeViewIdState.cpp)
+
 The paired vertex container holds an export-shader payload and a legacy vertex payload. A geometry-bound pipeline is taken to run the export-shader payload on the console. The host runs the legacy vertex payload; its exports are the geometry shader's inputs.
 
 ## DXIL bitcode blocks

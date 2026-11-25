@@ -97,7 +97,8 @@ std::vector<std::uint8_t> zlib_stored(std::span<const std::uint8_t> data) {
     return out;
 }
 
-std::vector<std::uint8_t> geometry_container(std::span<const std::uint32_t> words = kGsWords) {
+std::vector<std::uint8_t> geometry_container(std::span<const std::uint32_t> words = kGsWords,
+                                             std::uint8_t input_texcoord_columns = 1) {
     constexpr std::size_t kStageData = 0x14C + 8 * (4 + 10 * 10 * 4);
     constexpr std::size_t kRecord = 0x54;
     constexpr std::uint64_t kAbsent = 0xDEADBEEFDEADBEEFull;
@@ -163,9 +164,11 @@ std::vector<std::uint8_t> geometry_container(std::span<const std::uint32_t> word
     texcoord.row = 1;
     texcoord.col = 0;
     texcoord.cols = 1;
-    const std::vector<SigElement> rows{position, texcoord};
-    const std::vector<std::uint8_t> isg1 = signature(rows, true);
-    const std::vector<std::uint8_t> osg1 = signature(rows, false);
+    const std::vector<SigElement> outputs{position, texcoord};
+    texcoord.cols = input_texcoord_columns;
+    const std::vector<SigElement> inputs{position, texcoord};
+    const std::vector<std::uint8_t> isg1 = signature(inputs, true);
+    const std::vector<std::uint8_t> osg1 = signature(outputs, false);
     const std::array<std::pair<FourCC, std::span<const std::uint8_t>>, 3> parts{{
         {kDxil, dxil},
         {kIsg1, isg1},
@@ -492,6 +495,12 @@ TEST(geometry_shader_emits_a_triangle_on_warp) {
         return;
     }
     CHECK(red >= kRed);
+}
+
+TEST(geometry_shader_validates_with_different_signature_widths) {
+    constexpr std::uint8_t kInputTexcoordColumns = 3;
+    check_dxil(translate(geometry_container(kGsWords, kInputTexcoordColumns)).dxil,
+               "geometry with different signature widths");
 }
 
 TEST(geometry_shader_rejects_an_untracked_load_used_as_output_data) {

@@ -276,28 +276,17 @@ std::vector<std::uint8_t> Shader::finish() {
     if (graphics) {
         const std::uint32_t ni = signature_width(inputs);
         const std::uint32_t no = signature_width(outputs);
-        std::vector<std::uint32_t> view;
+        std::vector<std::uint32_t> view{ni, no};
+        if (mesh) view.push_back(signature_width(prims));
+        for (std::uint32_t i = 0; i < ni; ++i) {
+            for (std::uint32_t k = 0; k < (no + 31) / 32; ++k) {
+                const std::uint32_t bits = std::min(no - 32 * k, 32u);
+                view.push_back(bits == 32 ? UINT32_MAX : (1u << bits) - 1u);
+            }
+        }
         if (geometry) {
-            view.push_back(ni);
-            view.push_back(no);
-            const std::uint32_t in_mask = ni >= 32 ? UINT32_MAX : (ni == 0 ? 0u : (1u << ni) - 1u);
-            const std::uint32_t in_dwords = ni == 0 ? 0u : (ni + 31) / 32;
-            for (std::uint32_t output = 0; output < no; ++output)
-                for (std::uint32_t dword = 0; dword < in_dwords; ++dword)
-                    view.push_back(dword == 0 ? in_mask : 0u);
-            if (no > 0) {
-                const std::uint32_t out_dwords = (no + 31) / 32;
-                for (std::uint32_t dword = 0; dword < out_dwords; ++dword) view.push_back(0);
-            }
-        } else {
-            view = {ni, no};
-            if (mesh) view.push_back(signature_width(prims));
-            for (std::uint32_t i = 0; i < ni; ++i) {
-                for (std::uint32_t k = 0; k < (no + 31) / 32; ++k) {
-                    const std::uint32_t bits = std::min(no - 32 * k, 32u);
-                    view.push_back(bits == 32 ? UINT32_MAX : (1u << bits) - 1u);
-                }
-            }
+            constexpr std::uint32_t kUnusedGeometryStreams = 3;
+            view.insert(view.end(), kUnusedGeometryStreams, 0u);
         }
         const Ty array = m.array(static_cast<std::uint32_t>(view.size()), t.i32);
         std::vector<V> elements;
