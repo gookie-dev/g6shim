@@ -13,6 +13,7 @@ s_cmp_eq_u32 s9, 0
 s_cselect_b32 s18, 1, 0
 s_and_b32 s16, s9, 0x3fff0000
 s_bfe_u32 s17, s9, 0x80010
+s_and_b32 s19, s9, 0x40000000
 s_waitcnt lgkmcnt(0)
 v_mov_b32 v0, s16
 v_mov_b32 v1, s17

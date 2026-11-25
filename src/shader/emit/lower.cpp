@@ -197,8 +197,9 @@ std::map<std::uint8_t, std::pair<bool, std::optional<std::uint8_t>>> half_output
     return out;
 }
 
-Lower::Lower(const Parts& parts, const std::unordered_map<Value, Why, ValueHash>& bad)
-    : s_(parts.native->stage == HwStage::Ps), x_(&parts), bad_(&bad) {
+Lower::Lower(const Parts& parts, const std::unordered_map<Value, Why, ValueHash>& bad,
+             const std::map<DescriptorMask, Why>& bad_masked)
+    : s_(parts.native->stage == HwStage::Ps), x_(&parts), bad_(&bad), bad_masked_(&bad_masked) {
     const Program& p = *parts.p;
     for (std::size_t b = 0; b < p.blocks.size(); ++b) {
         const IrBlock& block = p.blocks[b];
@@ -2029,10 +2030,12 @@ V Lower::masked_descriptor_value(Value value, std::uint32_t mask) {
     }
     const auto at = phi_at_.find(value);
     if (at != phi_at_.end() && !is_mask(value) && !x_->st->highs.contains(value)) {
-        if (bad_->contains(value)) fail(bad_->at(value));
+        const DescriptorMask key{value, mask};
+        const auto failed = bad_masked_->find(key);
+        if (failed != bad_masked_->end()) fail(failed->second);
         const auto [b, i] = at->second;
         if (block_[b] && x_->p->blocks[b].phis[i].reg.kind == Reg::Kind::S) {
-            const auto [entry, inserted] = masked_descriptor_phis_.try_emplace({value, mask}, V{});
+            const auto [entry, inserted] = masked_descriptor_phis_.try_emplace(key, V{});
             if (inserted) {
                 entry->second = s_.m.phi(*block_[b], s_.t.i32);
                 pending_descriptor_phis_.emplace_back(value, mask, entry->second);
@@ -2059,7 +2062,7 @@ void Lower::fill_masked_descriptor_phis() {
             try {
                 incoming.emplace_back(masked_descriptor_value(phi.args[j], mask), qb);
             } catch (const WhyError& error) {
-                throw Stop::retry(source, error.why);
+                throw Stop::retry_masked(source, mask, error.why);
             }
         }
         s_.m.set_phi(result, incoming);
@@ -2153,16 +2156,18 @@ void Lower::fill_phis() {
 
 Lowered lower(const Parts& parts) {
     std::unordered_map<Value, Why, ValueHash> bad;
+    std::map<DescriptorMask, Why> bad_masked;
     for (;;) {
         try {
-            Lower lowering(parts, bad);
+            Lower lowering(parts, bad, bad_masked);
             return lowering.run();
         } catch (const Stop& stop) {
             if (stop.kind == Stop::Kind::Retry) {
-                if (bad.contains(stop.value))
+                const bool inserted = stop.mask ? bad_masked.try_emplace(DescriptorMask{stop.value, *stop.mask}, stop.why).second
+                                                : bad.try_emplace(stop.value, stop.why).second;
+                if (!inserted)
                     throw ParseError(ErrorKind::Unsupported,
                                      "GFX10 code at 0x0: a phi that does not settle is not supported");
-                bad[stop.value] = stop.why;
             } else {
                 throw ParseError(ErrorKind::Unsupported, "GFX10 code at " + hex(stop.offset) + ": " +
                                                              std::string(stop.why) +

@@ -21,6 +21,7 @@
 namespace g6shim::shader::emit {
 
 using Why = std::string_view;
+using DescriptorMask = std::pair<Value, std::uint32_t>;
 
 using IrInst = ::g6shim::shader::Inst;
 using IrBlock = ::g6shim::shader::Block;
@@ -65,9 +66,11 @@ struct Stop {
     Value value{};
     Why why{};
     std::size_t offset = 0;
+    std::optional<std::uint32_t> mask;
 
-    static Stop retry(Value value, Why why) { return {Kind::Retry, value, why, 0}; }
-    static Stop failure(std::size_t offset, Why what) { return {Kind::Fail, Value{}, what, offset}; }
+    static Stop retry(Value value, Why why) { return {Kind::Retry, value, why, 0, std::nullopt}; }
+    static Stop retry_masked(Value value, std::uint32_t mask, Why why) { return {Kind::Retry, value, why, 0, mask}; }
+    static Stop failure(std::size_t offset, Why what) { return {Kind::Fail, Value{}, what, offset, std::nullopt}; }
 };
 
 enum class MaskData : std::uint8_t { Console, Host, None };
@@ -91,7 +94,8 @@ std::map<std::uint8_t, std::pair<bool, std::optional<std::uint8_t>>> half_output
 
 class Lower {
 public:
-    Lower(const Parts& parts, const std::unordered_map<Value, Why, ValueHash>& bad);
+    Lower(const Parts& parts, const std::unordered_map<Value, Why, ValueHash>& bad,
+          const std::map<DescriptorMask, Why>& bad_masked);
 
     Lowered run();
 
@@ -235,6 +239,7 @@ private:
     Shader s_;
     const Parts* x_ = nullptr;
     const std::unordered_map<Value, Why, ValueHash>* bad_ = nullptr;
+    const std::map<DescriptorMask, Why>* bad_masked_ = nullptr;
     std::unordered_map<Value, Why, ValueHash> lane_fail_;
     std::unordered_map<Value, Val, ValueHash> vals_;
     std::unordered_map<Value, V, ValueHash> floats_;
@@ -249,7 +254,7 @@ private:
     std::unordered_set<Value, ValueHash> read_phis_;
     std::unordered_map<Value, std::pair<std::size_t, std::uint32_t>, ValueHash> params_;
     std::unordered_map<Value, UserData, ValueHash> descriptor_addresses_;
-    std::map<std::pair<Value, std::uint32_t>, V> masked_descriptor_phis_;
+    std::map<DescriptorMask, V> masked_descriptor_phis_;
     std::vector<std::tuple<Value, std::uint32_t, V>> pending_descriptor_phis_;
     std::optional<V> user_data_;
     std::map<std::uint32_t, UserData> user_reads_;
