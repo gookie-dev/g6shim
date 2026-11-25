@@ -55,7 +55,8 @@ UsedResource used_uav(std::uint8_t user_data, std::uint8_t slot, std::uint8_t dw
     return used;
 }
 
-Lowered lower_native(const NativeProgram& native) {
+Lowered lower_native(const NativeProgram& native, const std::vector<SigElement>& inputs,
+                     const std::vector<SigElement>& outputs) {
     const Program program = ::g6shim::shader::build(native.patched_code(), native.wave64, native.vgprs);
     const Structured structured = structure(program);
     const Resources resources = track(program, native.layout, native.stage, &structured);
@@ -66,6 +67,8 @@ Lowered lower_native(const NativeProgram& native) {
     parts.st = &structured;
     parts.io = &raised;
     parts.res = &resources;
+    parts.inputs = inputs;
+    parts.outputs = outputs;
     return lower(parts);
 }
 

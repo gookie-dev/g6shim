@@ -99,6 +99,8 @@ Word 5 of the eight-word image descriptor has reserved zero bits at 31:24. Check
 
 Word 7 of an eight-word shader-resource image descriptor from a shim table or resource heap is zero. It holds compression metadata address bits, and the title-facing texture layout allocates no compression metadata plane. The PC driver manages any metadata for its own texture separately.
 
+A packed pixel input can share one hardware attribute across two half-precision signature rows. When the stage layout repeats the primary row instead of listing a partner, the translator uses an unclaimed adjacent half-precision row or the only eligible row before the next implicit pair.
+
 ## Device slots
 
 | Slot | Offset | Method |

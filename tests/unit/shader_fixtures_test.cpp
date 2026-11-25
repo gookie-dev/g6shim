@@ -44,6 +44,7 @@ constexpr std::string_view kScalarRawHighWord = "scalar_raw_buffer_high_word";
 constexpr std::string_view kScalarTypedFormat = "scalar_typed_buffer_format";
 constexpr std::string_view kScalarImageAddress = "scalar_image_address";
 constexpr std::string_view kImageSampleBiasA16 = "image_sample_bias_a16";
+constexpr std::string_view kPackedInputPartner = "packed_input_partner";
 
 const Fixture* find_fixture(std::string_view name) {
     const auto found = std::find_if(std::begin(kFixtures), std::end(kFixtures),
@@ -67,7 +68,8 @@ TEST(shader_fixtures_translate_and_validate) {
             fixture.name == kScalarBufferFields || fixture.name == kScalarStructuredFields ||
             fixture.name == kScalarRawHighWord || fixture.name == kScalarTypedFormat ||
             fixture.name == kScalarImageAddress || fixture.name == kScalarConstantBufferWords ||
-            fixture.name == kImageSampleBiasA16 || fixture.name == kScalarBufferCountOnly)
+            fixture.name == kImageSampleBiasA16 || fixture.name == kScalarBufferCountOnly ||
+            fixture.name == kPackedInputPartner)
             continue;
         bool translated = true;
         Lowered lowered;
@@ -109,6 +111,69 @@ TEST(shader_fixtures_translate_biased_sample_with_packed_coordinates) {
         check_dxil(lowered.dxil, fixture->name);
     } catch (const std::exception& error) {
         std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
+    }
+}
+
+TEST(shader_fixtures_translate_an_implicit_packed_pixel_input_pair) {
+    const Fixture* fixture = find_fixture(kPackedInputPartner);
+    CHECK(fixture != nullptr);
+    if (fixture == nullptr) return;
+
+    NativeProgram native;
+    native.stage = HwStage::Ps;
+    native.vgprs = kFixtureVgprs;
+    PsIo io;
+    io.input_addr = 2;
+    PsInput packed;
+    packed.usage = Usage{Usage::Kind::Generic, 0};
+    packed.mask = 15;
+    packed.fp16 = true;
+    packed.pack2 = true;
+    io.inputs.push_back(packed);
+    native.io = io;
+    native.code = bytes_of(fixture->words);
+
+    const std::vector<SigElement> inputs{
+        {"TEXCOORD", 0, 0, 9, 2, 0u, 0, 4, 0, true},
+        {"TEXCOORD", 1, 0, 9, 2, 1u, 0, 4, 0, true},
+    };
+    const std::vector<SigElement> outputs{{"SV_Target", 0, 16, 9, 0, 0u, 0, 4, 0, false}};
+    try {
+        check_dxil(lower_native(native, inputs, outputs).dxil, fixture->name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate: %s\n", fixture->name, error.what());
+        CHECK(false);
+    }
+
+    PsInput independent;
+    independent.usage = Usage{Usage::Kind::Generic, 1};
+    independent.row = 1;
+    independent.row2 = 1;
+    independent.mask = 15;
+    independent.attr = 1;
+    io.inputs.push_back(independent);
+    native.io = io;
+    bool rejected = false;
+    try {
+        (void)lower_native(native, inputs, outputs);
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("a packed input half no element holds") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
+
+    auto separated_inputs = inputs;
+    separated_inputs[1].row = 3;
+    separated_inputs[1].cols = 2;
+    SigElement separate = inputs[1];
+    separate.index = 2;
+    separate.half = false;
+    separated_inputs.push_back(separate);
+    try {
+        check_dxil(lower_native(native, separated_inputs, outputs).dxil, fixture->name);
+    } catch (const std::exception& error) {
+        std::printf("fixture %s did not translate a separated partner: %s\n", fixture->name, error.what());
         CHECK(false);
     }
 }

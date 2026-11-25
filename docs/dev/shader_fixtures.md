@@ -38,6 +38,8 @@ The test lowers each program as a wave32 compute shader with 8 VGPRs, five user 
 
 `image_sample_bias_a16.s` is a pixel shader with a dedicated register for the half-precision bias and a non-sequential address register for the two packed half-precision coordinates.
 
+`packed_input_partner.s` interpolates the high half of the third packed component. Its two half-precision signature rows share one hardware attribute. The cases cover an adjacent partner, a unique partner beyond a separate input, and rejection when no eligible partner exists.
+
 ## Adding a program
 
 1. Write `tests/gfx10/<rule>.s` in the frame above; the file name is the fixture's name.

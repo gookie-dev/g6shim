@@ -22,6 +22,44 @@ bool usage_is_other_zero(const Usage& usage) {
     return usage.kind == Usage::Kind::Other && usage.raw == 0;
 }
 
+std::optional<std::uint8_t> packed_input_partner(const PsInput& input, const std::vector<PsInput>& layout,
+                                                 const std::vector<SigElement>& signature) {
+    if (!input.pack2) return std::nullopt;
+    if (input.row2 != input.row) return input.row2;
+    if (input.row == UINT8_MAX) return std::nullopt;
+    const auto available = [&](std::uint8_t row) {
+        const bool reserved = std::any_of(layout.begin(), layout.end(), [row](const PsInput& entry) {
+            return entry.row == row || (entry.pack2 && entry.row2 != entry.row && entry.row2 == row);
+        });
+        if (reserved) return false;
+
+        bool has_packed_row = false;
+        for (const SigElement& element : signature) {
+            if (element.row != row) continue;
+            if (!element.half || element.kind != 0 || element.comp != 9) return false;
+            has_packed_row = true;
+        }
+        return has_packed_row;
+    };
+    const auto adjacent = static_cast<std::uint8_t>(input.row + 1);
+    if (available(adjacent)) return adjacent;
+
+    std::uint32_t end_row = UINT8_MAX + 1u;
+    for (const PsInput& entry : layout) {
+        if (entry.fp16 && entry.pack2 && entry.row2 == entry.row && entry.row > input.row)
+            end_row = std::min(end_row, std::uint32_t{entry.row});
+    }
+    std::optional<std::uint8_t> partner;
+    for (const SigElement& element : signature) {
+        if (!element.row || *element.row <= adjacent || *element.row >= end_row) continue;
+        const auto row = static_cast<std::uint8_t>(*element.row);
+        if (row == partner || !available(row)) continue;
+        if (partner) return std::nullopt;
+        partner = row;
+    }
+    return partner;
+}
+
 }  // namespace
 
 void Lower::interp(const IrInst& inst, Site site) {
@@ -75,8 +113,7 @@ void Lower::interp(const IrInst& inst, Site site) {
         for (const PsInput& input : ps->inputs) {
             if (input.row != attribute.row || !input.fp16) continue;
             packing = std::pair<bool, std::optional<std::uint8_t>>{
-                input.pack2, input.row2 != input.row ? std::optional<std::uint8_t>{input.row2}
-                                                     : std::nullopt};
+                input.pack2, packed_input_partner(input, ps->inputs, s_.inputs)};
             break;
         }
     }
