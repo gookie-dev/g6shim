@@ -95,8 +95,16 @@ std::optional<std::uint32_t> table_buffer_component_mapping(const descriptor::He
                                                             std::uint32_t dword);
 std::optional<std::uint32_t> table_image_base_word(const descriptor::Heap& heap, std::uint64_t table,
                                                  std::uint32_t dword);
-std::optional<std::array<std::uint32_t, 2>> table_image_dimensions(const descriptor::Heap& heap,
-                                                                  std::uint64_t table, std::uint32_t dword);
+struct ImageShapeWords {
+    std::uint32_t width_low;
+    std::uint32_t dimensions;
+    std::uint32_t base_mip;
+
+    friend bool operator==(const ImageShapeWords&, const ImageShapeWords&) = default;
+};
+
+std::optional<ImageShapeWords> table_image_shape(const descriptor::Heap& heap, std::uint64_t table,
+                                                 std::uint32_t dword);
 std::optional<std::uint32_t> sampler_lod_word(const descriptor::Heap& heap, std::uint32_t dword);
 std::optional<std::uint32_t> table_image_sampling_fields(const descriptor::Heap& heap, std::uint64_t table,
                                                         std::uint32_t dword);

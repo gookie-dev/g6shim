@@ -956,8 +956,8 @@ std::optional<std::uint32_t> table_image_base_word(const descriptor::Heap& heap,
     return static_cast<std::uint32_t>(*address >> kImageBaseAddressShift);
 }
 
-std::optional<std::array<std::uint32_t, 2>> table_image_dimensions(const descriptor::Heap& heap,
-                                                                  std::uint64_t table, std::uint32_t dword) {
+std::optional<ImageShapeWords> table_image_shape(const descriptor::Heap& heap, std::uint64_t table,
+                                                 std::uint32_t dword) {
     const auto view = table_view(heap, table, dword);
     if (!view) return std::nullopt;
     const auto desc = shader_view_desc(*view);
@@ -974,7 +974,7 @@ std::optional<std::array<std::uint32_t, 2>> table_image_dimensions(const descrip
     } else {
         const auto* srv = std::get_if<descriptor::ShaderView>(&*view);
         if (srv == nullptr) return std::nullopt;
-        if (srv->resource == 0) return std::array<std::uint32_t, 2>{};
+        if (srv->resource == 0) return ImageShapeWords{};
         const auto memory = resource::texture_memory(reinterpret_cast<Object*>(srv->resource));
         if (!memory) return std::nullopt;
         resource_desc = memory->second;
@@ -985,11 +985,18 @@ std::optional<std::array<std::uint32_t, 2>> table_image_dimensions(const descrip
         resource_desc.height == 0 || resource_desc.height > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION)
         return std::nullopt;
     using UserData = g6shim::shader::emit::UserData;
+    const std::uint32_t base_mip = desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2D
+                                       ? desc->Texture2D.MostDetailedMip
+                                       : desc->Texture2DArray.MostDetailedMip;
+    if (base_mip > (UserData::kImageBaseMipMask >> UserData::kImageBaseMipShift) ||
+        (resource_desc.mip_levels != 0 && base_mip >= resource_desc.mip_levels))
+        return std::nullopt;
     constexpr std::uint32_t kWidthLowBits = 32u - UserData::kImageWidthLowShift;
     const auto width = static_cast<std::uint32_t>(resource_desc.width - 1);
     const std::uint32_t height = resource_desc.height - 1;
-    return std::array{width << UserData::kImageWidthLowShift,
-                      (width >> kWidthLowBits) | (height << UserData::kImageWidthHighBits)};
+    return ImageShapeWords{width << UserData::kImageWidthLowShift,
+                           (width >> kWidthLowBits) | (height << UserData::kImageWidthHighBits),
+                           base_mip << UserData::kImageBaseMipShift};
 }
 
 std::optional<std::uint32_t> table_image_sampling_fields(const descriptor::Heap& heap, std::uint64_t table,

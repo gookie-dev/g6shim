@@ -23,6 +23,7 @@ constexpr std::uint32_t kResourceDescriptorBytes = 32;
 constexpr std::uint32_t kBufferRecordCountWord = 2;
 constexpr std::uint32_t kImageWidthLowWord = 1;
 constexpr std::uint32_t kImageDimensionsWord = 2;
+constexpr std::uint32_t kImageBaseMipWord = 3;
 constexpr std::uint32_t kSamplerDescriptorBytes = 16;
 constexpr std::uint32_t kSamplerLodWord = 1;
 constexpr std::uint32_t kImageWord5ReservedMask = 0xff00'0000;
@@ -873,6 +874,8 @@ void Lower::standalone_descriptor_data(const IrInst& inst, Site site, std::uint8
             source = SourceKind::ImageWidthLowBits;
         else if (resource_words == 8 && word == kImageDimensionsWord)
             source = SourceKind::ImageDimensions;
+        else if (resource_words == 8 && word == kImageBaseMipWord)
+            source = SourceKind::ImageBaseMip;
         if (source) {
             const UserData data{0, root.slot, root.root, descriptor_dword, *source};
             descriptor_addresses_[*value] = data;

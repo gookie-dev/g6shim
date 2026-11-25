@@ -95,7 +95,7 @@ The host can supply word 2 from an aligned table slot even when the shader never
 
 Image base-address words in fixed table slots use the same binding path. The source is the texture's title-facing memory address or the explicit address in a placed view. The image descriptor stores the base in units of 256 bytes.
 
-Fixed shader-resource views of two-dimensional textures expose width minus one across words 1 and 2 and height minus one in word 2. These fields use the underlying mip-zero dimensions, including views that start at a later mip. The translator accepts masks that use only these dimension bits.
+Fixed shader-resource views of two-dimensional textures expose width minus one across words 1 and 2 and height minus one in word 2. These fields use the underlying mip-zero dimensions, including views that start at a later mip. Bits 12 through 15 of word 3 hold the view's starting mip. The translator accepts masks that use only these verified fields.
 
 An ordinary sampler descriptor exposes its LOD word at a fixed sampler heap slot. Its minimum and maximum are clamped and truncated to unsigned 4.8 fields, and the upper byte is zero. This layout was observed in synthetic SDK-created samplers on devices `1002:744C` and `1002:13C0`. Extended sampler descriptors require a separate encoding for their tuning fields.
 

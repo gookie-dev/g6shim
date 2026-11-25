@@ -217,7 +217,7 @@ TEST(shader_fixtures_translate_image_dimensions_without_an_image_operation) {
     try {
         const auto lowered = lower_fixture(*fixture, {input, output});
         using Source = UserData::Source;
-        for (const auto source : {Source::ImageWidthLowBits, Source::ImageDimensions}) {
+        for (const auto source : {Source::ImageWidthLowBits, Source::ImageDimensions, Source::ImageBaseMip}) {
             const auto field = std::find_if(lowered.user_data.begin(), lowered.user_data.end(),
                 [source](const UserData& entry) { return entry.source == source; });
             CHECK(field != lowered.user_data.end());
@@ -237,6 +237,20 @@ TEST(shader_fixtures_translate_image_dimensions_without_an_image_operation) {
     bool rejected = false;
     try {
         (void)lower_fixture(unknown, {input, output});
+    } catch (const std::exception& error) {
+        rejected = std::string_view(error.what()).find("a descriptor's address or format read as data") !=
+                   std::string_view::npos;
+    }
+    CHECK(rejected);
+
+    Fixture unknown_mip = *fixture;
+    const auto extract = std::find(unknown_mip.words.begin(), unknown_mip.words.end(), 0x0004'000Cu);
+    CHECK(extract != unknown_mip.words.end());
+    if (extract == unknown_mip.words.end()) return;
+    ++*extract;
+    rejected = false;
+    try {
+        (void)lower_fixture(unknown_mip, {input, output});
     } catch (const std::exception& error) {
         rejected = std::string_view(error.what()).find("a descriptor's address or format read as data") !=
                    std::string_view::npos;

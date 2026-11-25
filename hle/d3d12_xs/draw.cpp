@@ -333,10 +333,13 @@ std::optional<std::uint32_t> State::descriptor_value(
     if (heap == nullptr) return std::nullopt;
     if (data.source == Source::ImageBaseAddressLow)
         return descriptor_host::table_image_base_word(*heap, root.value, data.dword);
-    if (data.source == Source::ImageWidthLowBits || data.source == Source::ImageDimensions) {
-        const auto words = descriptor_host::table_image_dimensions(*heap, root.value, data.dword);
+    if (data.source == Source::ImageWidthLowBits || data.source == Source::ImageDimensions ||
+        data.source == Source::ImageBaseMip) {
+        const auto words = descriptor_host::table_image_shape(*heap, root.value, data.dword);
         if (!words) return std::nullopt;
-        return (*words)[data.source == Source::ImageWidthLowBits ? 0 : 1];
+        if (data.source == Source::ImageWidthLowBits) return words->width_low;
+        if (data.source == Source::ImageDimensions) return words->dimensions;
+        return words->base_mip;
     }
     if (data.source == Source::ImageSamplingFields)
         return descriptor_host::table_image_sampling_fields(*heap, root.value, data.dword);
