@@ -78,6 +78,13 @@ void Lower::sop(const IrInst& inst) {
     std::optional<Value> lo;
     if (dst_code) lo = inst.write(Reg::s(*dst_code));
     if (inst.write(Reg::s(kExec)).has_value() || is_mask(lo)) fail(kLaneMask);
+    if (lo && std::binary_search(x_->io->geometry_primitive_counts.begin(),
+                                 x_->io->geometry_primitive_counts.end(), *lo)) {
+        constexpr std::uint32_t kPrimitivesPerInvocation = 1;
+        set(lo, Val::i32(s_.m.i32(kPrimitivesPerInvocation)));
+        set(scc, Val::bit(s_.m.boolean(true)));
+        return;
+    }
     if (name == "s_setreg_imm32_b32" || name == "s_setreg_b32" || name == "s_swappc_b64" ||
         name == "s_version" || name.starts_with("s_waitcnt"))
         fail("a register the emitter does not model");

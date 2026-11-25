@@ -147,6 +147,7 @@ struct Io {
     std::vector<RingLoad> ring_loads;
     std::vector<RingStore> ring_stores;
     std::vector<Site> ring_address_loads;
+    std::vector<Value> geometry_primitive_counts;
     std::optional<std::uint8_t> initialized_sgprs;
 
     friend bool operator==(const Io&, const Io&) = default;

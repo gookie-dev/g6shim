@@ -71,7 +71,9 @@ A table or heap parameter holds the 32-bit heap address in its first dword, with
 
 A geometry program is a merged export/geometry stage on local-data-share rings, not a primitive shader. It is wave64. It does not use `exp`.
 
-On entry only `v0` and `v1` are live. They hold packed 16-bit input-vertex offsets, unpacked with word selects (`WORD_0` of `v0`, `WORD_1` of `v0`, `WORD_0` of `v1` are vertices 0, 1 and 2). `v2`-`v4` are not live.
+The live vertex-offset registers on entry are `v0` and `v1`. They hold packed 16-bit input-vertex offsets, unpacked with word selects (`WORD_0` of `v0`, `WORD_1` of `v0`, `WORD_0` of `v1` are vertices 0, 1 and 2).
+
+The merged-wave word in `s3` holds the geometry primitive count in bits 8–15. The host runs one primitive per invocation. A count extracted for an EXEC prefix mask or a comparison against zero can use that host count. A full-wave comparison is also supported when it only selects between the prefix mask and a full EXEC mask. Any use of the native count as shader data remains unsupported. [Public instruction set reference](https://docs.amd.com/api/khub/documents/Et~wpu9g~Ffl7d9q0QZ~Og/content)
 
 Export-shader outputs are read from local data share at those vertex offsets (`ds_read2_b32` and `ds_read_b32`). A packed offset may be multiplied by four with a word-select shift or with a shift and low-word mask. Each signature register is 4 dwords, so register `n` starts 16 bytes after the vertex base. The input primitive is a triangle.
 

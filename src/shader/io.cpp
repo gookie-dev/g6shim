@@ -9,6 +9,7 @@
 #include <functional>
 
 #include <optional>
+#include <span>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -457,6 +458,84 @@ void raise_rings(const Program& program, const std::unordered_map<Value, Site, V
     find_ring_address_loads(program, defs, phis, ring_addresses, io);
 }
 
+void raise_geometry_primitive_counts(const Program& program, Io& io) {
+    constexpr std::uint8_t kMergedWaveInfoSgpr = 3;
+    constexpr std::int32_t kPrimitiveCountExtract = (8 << 16) | 8;
+    const auto input = std::find_if(program.inputs.begin(), program.inputs.end(), [](const auto& entry) {
+        return entry.first == Reg::s(kMergedWaveInfoSgpr);
+    });
+    if (input == program.inputs.end()) return;
+
+    std::unordered_map<Value, std::vector<const Inst*>, ValueHash> users;
+    for (const Block& block : program.blocks) {
+        for (const Phi& phi : block.phis)
+            for (Value value : phi.args) users[value].push_back(nullptr);
+        for (const Inst& inst : block.insts)
+            for (const auto& read : inst.reads) users[read.second].push_back(&inst);
+    }
+    const auto uses = [&](Value value) -> std::span<const Inst* const> {
+        const auto found = users.find(value);
+        return found == users.end() ? std::span<const Inst* const>{} : std::span<const Inst* const>{found->second};
+    };
+    const auto scalar = [](const Inst& inst, const Operand& operand) -> std::optional<Value> {
+        const auto* reg = std::get_if<ScalarOperand>(&operand);
+        return reg ? inst.read(Reg::s(reg->code)) : std::nullopt;
+    };
+    const auto full_wave_mask_select = [&](const Inst* inst, Value count) {
+        if (inst == nullptr || inst->name() != "s_cselect_b64" || !inst->write(Reg::s(kExec))) return false;
+        const auto* fields = std::get_if<SopFields>(&inst->fields);
+        if (fields == nullptr || fields->src.size() != 2 || immediate(fields->src[0]) != -1) return false;
+        const auto* retained = std::get_if<ScalarOperand>(&fields->src[1]);
+        if (retained == nullptr || retained->code != kExec || retained->dwords != 2) return false;
+        const auto low = inst->read(Reg::s(kExec));
+        const auto high = inst->read(Reg::s(kExec + 1));
+        if (!low || !high) return false;
+        return std::any_of(uses(count).begin(), uses(count).end(), [&](const Inst* mask) {
+            return mask != nullptr && mask->name() == "s_bfm_b64" && mask->write(Reg::s(kExec)) == low &&
+                   mask->write(Reg::s(kExec + 1)) == high;
+        });
+    };
+    const auto dispatch_control = [&](const Inst* inst, Value count) {
+        if (inst == nullptr) return false;
+        const auto* fields = std::get_if<SopFields>(&inst->fields);
+        if (fields == nullptr || fields->src.size() != 2) return false;
+        const bool count_first = scalar(*inst, fields->src[0]) == count;
+        const bool count_second = scalar(*inst, fields->src[1]) == count;
+        const auto compared = count_first ? immediate(fields->src[1]) : immediate(fields->src[0]);
+        const bool count_then_zero = count_first && compared == 0;
+        if (inst->name() == "s_cmp_eq_u32" || inst->name() == "s_cmp_lg_u32") {
+            if (!count_first && !count_second) return false;
+            if (compared == 0) return true;
+            if (inst->name() != "s_cmp_eq_u32" || compared != (program.wave64 ? 64 : 32)) return false;
+            const auto condition = inst->write(Reg::scc());
+            return condition && !uses(*condition).empty() &&
+                   std::all_of(uses(*condition).begin(), uses(*condition).end(),
+                               [&](const Inst* use) { return full_wave_mask_select(use, count); });
+        }
+        if (inst->name() != "s_bfm_b64" || !count_then_zero) return false;
+        for (const auto& write : inst->writes)
+            for (const Inst* mask_use : uses(write.second))
+                if (mask_use == nullptr || !mask_use->write(Reg::s(kExec)) ||
+                    (mask_use->name() != "s_cselect_b64" && mask_use->name() != "s_mov_b64"))
+                    return false;
+        return true;
+    };
+    for (const Inst* inst : uses(input->second)) {
+        if (inst == nullptr || (inst->name() != "s_bfe_i32" && inst->name() != "s_bfe_u32")) continue;
+        const auto* fields = std::get_if<SopFields>(&inst->fields);
+        if (fields == nullptr || fields->src.size() != 2 || !fields->dst ||
+            scalar(*inst, fields->src[0]) != input->second || immediate(fields->src[1]) != kPrimitiveCountExtract)
+            continue;
+        const auto* dst = std::get_if<ScalarOperand>(&*fields->dst);
+        const auto count = dst && dst->code < kVcc ? inst->write(Reg::s(dst->code)) : std::nullopt;
+        if (!count || uses(*count).empty()) continue;
+        if (std::all_of(uses(*count).begin(), uses(*count).end(),
+                        [&](const Inst* use) { return dispatch_control(use, *count); }))
+            io.geometry_primitive_counts.push_back(*count);
+    }
+    std::sort(io.geometry_primitive_counts.begin(), io.geometry_primitive_counts.end());
+}
+
 }  // namespace
 
 std::vector<std::pair<std::uint8_t, Input>> pixel_input_vgprs(std::uint32_t input_addr) {
@@ -672,7 +751,10 @@ Io raise(const Program& program, const NativeProgram& native) {
             for (const auto& entry : block.insts[i].writes) defs[entry.second] = Site{b, i};
         for (std::size_t i = 0; i < block.phis.size(); ++i) phis[block.phis[i].value] = Site{b, i};
     }
-    if (native.stage == HwStage::Gs) raise_rings(program, defs, phis, io);
+    if (native.stage == HwStage::Gs) {
+        raise_rings(program, defs, phis, io);
+        raise_geometry_primitive_counts(program, io);
+    }
     const Halves halves(program, defs, phis);
 
     for (std::size_t b = 0; b < program.blocks.size(); ++b) {

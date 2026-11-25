@@ -1,8 +1,11 @@
 ; SPDX-FileCopyrightText: 2026 gookie and g6shim contributors
 ; SPDX-License-Identifier: GPL-3.0-or-later
-s_mov_b32 s0, 3
-s_bfm_b64 s[2:3], s0, 0
-s_cselect_b64 exec, s[2:3], 0
+s_bfe_i32 s0, s3, 0x80008
+s_cmp_eq_u32 s0, 0
+s_cbranch_scc1 .Ldone
+s_bfm_b64 exec, s0, 0
+s_cmp_eq_u32 s0, 64
+s_cselect_b64 exec, -1, exec
 v_lshlrev_b32 v2, 2, v0
 v_and_b32 v2, 0x3fffc, v2
 s_mov_b32 s1, 2
@@ -34,5 +37,6 @@ ds_write2_b32 v11, v8, v9 offset0:2 offset1:3
 ds_write_b32 v11, v5 offset:16
 s_sendmsg 0x22
 s_sendmsg 0x12
+.Ldone:
 s_sendmsg 3
 s_endpgm
